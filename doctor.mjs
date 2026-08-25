@@ -230,6 +230,11 @@ const MCP_CONFIGS = [
   // there, and JSON.parse throwing on them used to read as "no MCP server
   // configured" (#2252).
   { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'] },
+  // Codex stores MCP servers globally in ~/.codex/config.toml (or CODEX_HOME),
+  // rather than in a project file. Keep this check deliberately small: the
+  // doctor only needs to know whether a mcp_servers.* TOML table references
+  // the Playwright MCP package.
+  { cli: 'codex', files: [], codex: true },
 ];
 
 // Server qualifies if its definition references the @playwright/mcp package.
@@ -264,6 +269,33 @@ function readConfigIfPresent(file) {
 // the tests point it at a tmpdir so this never reads the real machine.
 function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+}
+
+function codexConfigFile() {
+  const configDir = process.env.CODEX_HOME || join(homedir(), '.codex');
+  return join(configDir, 'config.toml');
+}
+
+function hasPlaywrightInCodexConfig() {
+  const file = codexConfigFile();
+  if (!existsSync(file)) return false;
+  try {
+    let section = '';
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const header = line.match(/^\s*\[([^\]]+)\]\s*$/);
+      if (header) {
+        section = header[1];
+        continue;
+      }
+      if ((section === 'mcp_servers' || section.startsWith('mcp_servers.'))
+        && /@playwright\/mcp/i.test(line)) {
+        return true;
+      }
+    }
+  } catch {
+    // Missing or malformed Codex config reads as not configured.
+  }
+  return false;
 }
 
 // A Claude Code plugin declares its MCP servers in its own .mcp.json, which
@@ -303,6 +335,7 @@ function isPlaywrightMcpConfigured(root, activeCli) {
     return hasPlaywrightIn(readConfigIfPresent(file));
   });
   if (inProject) return true;
+  if (entry.codex) return hasPlaywrightInCodexConfig();
   // Gated behind the project scan, so an already-configured project pays no
   // extra I/O and non-plugin CLIs never touch the user config dir.
   return entry.plugins === true && isPlaywrightMcpFromPlugin();
@@ -364,8 +397,12 @@ function checkPlaywrightMcp(root, activeCli) {
     fix: [
       entry.plugins
         ? `No project-level MCP config, and no enabled plugin providing one, was detected for ${activeCli}.`
+        : entry.codex
+          ? `No Codex MCP config referencing @playwright/mcp was detected in ${codexConfigFile()}.`
         : `No project-level MCP config was detected for ${activeCli}.`,
-      activeCli === 'opencode'
+      activeCli === 'codex'
+        ? 'Add it with: codex mcp add playwright -- npx -y @playwright/mcp@latest'
+        : activeCli === 'opencode'
         ? 'Add the Playwright MCP server to opencode.json (see opencode.example.json) or pass --cli <name> if you actually run a different CLI.'
         : `Add the Playwright MCP server to your ${activeCli} config, or install a plugin that provides it (e.g. /plugin install playwright@claude-plugins-official).`,
     ],
@@ -631,7 +668,7 @@ async function main() {
     process.exit(1);
   } else {
     const warnNote = warnings > 0 ? ` (${warnings} warning${warnings === 1 ? '' : 's'} — see above)` : '';
-    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`claude\` (or \`opencode\`) to start.`);
+    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`${activeCli}\` to start.`);
     console.log('');
     console.log('Join the community: https://discord.gg/8pRpHETxa4');
     console.log('Read the manifesto: `npm run manifesto` — a new way of job searching is taking shape, and you are now part of it.');
