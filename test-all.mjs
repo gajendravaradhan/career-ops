@@ -10921,7 +10921,9 @@ try {
     mkdirSync(join(tier2Tmp, 'data'));
     mkdirSync(join(tier2Tmp, 'reports'));
     const additionsDir = join(tier2Tmp, 'additions');
+    const batchState = join(tier2Tmp, 'batch-state.tsv');
     mkdirSync(additionsDir);
+    writeFileSync(batchState, '');
     const tracker = join(tier2Tmp, 'data', 'applications.md');
     writeFileSync(tracker,
       '# Applications Tracker\n\n' +
@@ -10947,7 +10949,14 @@ try {
       fail('tier-2 fixture roles now fuzzy-match — this test no longer isolates tier-2');
     }
 
-    const tier2Result = run(NODE, ['merge-tracker.mjs'], { env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: additionsDir } });
+    const tier2Result = run(NODE, ['merge-tracker.mjs'], {
+      env: {
+        ...process.env,
+        CAREER_OPS_TRACKER: tracker,
+        CAREER_OPS_ADDITIONS: additionsDir,
+        CAREER_OPS_BATCH_STATE: batchState,
+      },
+    });
     if (tier2Result === null) {
       fail('merge-tracker.mjs crashed during tier-2 title preservation test');
     } else {
@@ -12373,7 +12382,11 @@ try {
   // warning assertion below fails. Same reasoning as the GIT_CONFIG_* pinning
   // in section 12c.
   const emptyClaudeCfg = mkdtempSync(join(tmpdir(), 'co-emptycfg-'));
-  const doctorEnv = { env: { ...process.env, CLAUDE_CONFIG_DIR: emptyClaudeCfg } };
+  const isolatedDoctorEnv = { ...process.env, CLAUDE_CONFIG_DIR: emptyClaudeCfg, CODEX_HOME: emptyClaudeCfg };
+  // Earlier inline imports can load the owner's .env into this process. This
+  // fixture exercises the default Claude path, not that ambient preference.
+  delete isolatedDoctorEnv.CAREER_OPS_CLI;
+  const doctorEnv = { env: isolatedDoctorEnv };
 
   // No project MCP config → doctor surfaces a (non-fatal) warning instead of
   // letting SPA job boards fail silently.

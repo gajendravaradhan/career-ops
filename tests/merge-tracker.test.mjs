@@ -45,8 +45,12 @@ function runMergeDetailed(additions, opts = {}) {
   try {
     const tracker = join(work, 'applications.md');
     const addsDir = join(work, 'adds');
+    const batchState = join(work, 'batch-state.tsv');
     mkdirSync(addsDir, { recursive: true });
     writeFileSync(tracker, (opts.header ?? TRACKER_HEADER) + (opts.rows ?? ''));
+    // Keep the owner's live batch history from deciding whether a synthetic
+    // report number in this isolated merge fixture is marked failed.
+    writeFileSync(batchState, '');
     // On a reused workspace the pending TSVs are already on disk from the
     // aborted run; rewriting them would defeat the point of replaying them.
     if (!opts.reuse) {
@@ -65,7 +69,12 @@ function runMergeDetailed(additions, opts = {}) {
         // separator-row fixture below deliberately triggers a loud failure,
         // and its error text would otherwise land in the suite's own log.
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, CAREER_OPS_TRACKER: tracker, CAREER_OPS_ADDITIONS: addsDir },
+        env: {
+          ...process.env,
+          CAREER_OPS_TRACKER: tracker,
+          CAREER_OPS_ADDITIONS: addsDir,
+          CAREER_OPS_BATCH_STATE: batchState,
+        },
       });
     } catch (e) {
       output = String(e.stdout ?? '') + String(e.stderr ?? '');

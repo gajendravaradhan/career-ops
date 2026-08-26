@@ -23,11 +23,21 @@ const EMPTY_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'co-mcp-emptycfg-'));
 
 function runDoctor(cwd, args, env) {
   try {
+    const childEnv = {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR,
+      CODEX_HOME: EMPTY_CONFIG_DIR,
+    };
+    // test-all.mjs imports dotenv-using modules before discovered tests run.
+    // An owner preference loaded in that parent must not alter a default-CLI
+    // fixture.
+    delete childEnv.CAREER_OPS_CLI;
+    Object.assign(childEnv, env);
     const out = execFileSync(NODE, [DOCTOR, '--json', '--target', cwd, ...args], {
       cwd,
       // Order matters: the empty dir must override an ambient CLAUDE_CONFIG_DIR
       // from the developer's own shell, while a scenario's explicit env still wins.
-      env: { ...process.env, CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, CODEX_HOME: EMPTY_CONFIG_DIR, ...env },
+      env: childEnv,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
