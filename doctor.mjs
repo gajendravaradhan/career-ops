@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
 import { discoverPlugins, pluginRoots, pluginStatus } from './plugins/_engine.mjs';
+import { getCareerOpsRoot } from './path-resolver.mjs';
 import { resolveExtractorMode } from './browser-extract.mjs';
 import { parseConfigByExtension } from './jsonc-parse.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
@@ -54,7 +55,7 @@ validateFlags(argv, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperan
 
 const targetIdx = argv.indexOf('--target');
 const projectRoot =
-  targetIdx !== -1 && argv[targetIdx + 1] ? argv[targetIdx + 1] : __dirname;
+  targetIdx !== -1 && argv[targetIdx + 1] ? argv[targetIdx + 1] : getCareerOpsRoot();
 const JSON_OUT = argv.includes('--json');
 // --strict adds a live ATS-slug probe of portals.yml (network). Opt-in so the
 // default `npm run doctor` stays fast and fully offline.
@@ -230,11 +231,6 @@ const MCP_CONFIGS = [
   // there, and JSON.parse throwing on them used to read as "no MCP server
   // configured" (#2252).
   { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'] },
-  // Codex stores MCP servers globally in ~/.codex/config.toml (or CODEX_HOME),
-  // rather than in a project file. Keep this check deliberately small: the
-  // doctor only needs to know whether a mcp_servers.* TOML table references
-  // the Playwright MCP package.
-  { cli: 'codex', files: [], codex: true },
 ];
 
 // Server qualifies if its definition references the @playwright/mcp package.
@@ -269,33 +265,6 @@ function readConfigIfPresent(file) {
 // the tests point it at a tmpdir so this never reads the real machine.
 function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
-}
-
-function codexConfigFile() {
-  const configDir = process.env.CODEX_HOME || join(homedir(), '.codex');
-  return join(configDir, 'config.toml');
-}
-
-function hasPlaywrightInCodexConfig() {
-  const file = codexConfigFile();
-  if (!existsSync(file)) return false;
-  try {
-    let section = '';
-    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const header = line.match(/^\s*\[([^\]]+)\]\s*$/);
-      if (header) {
-        section = header[1];
-        continue;
-      }
-      if ((section === 'mcp_servers' || section.startsWith('mcp_servers.'))
-        && /@playwright\/mcp/i.test(line)) {
-        return true;
-      }
-    }
-  } catch {
-    // Missing or malformed Codex config reads as not configured.
-  }
-  return false;
 }
 
 // A Claude Code plugin declares its MCP servers in its own .mcp.json, which
@@ -335,7 +304,6 @@ function isPlaywrightMcpConfigured(root, activeCli) {
     return hasPlaywrightIn(readConfigIfPresent(file));
   });
   if (inProject) return true;
-  if (entry.codex) return hasPlaywrightInCodexConfig();
   // Gated behind the project scan, so an already-configured project pays no
   // extra I/O and non-plugin CLIs never touch the user config dir.
   return entry.plugins === true && isPlaywrightMcpFromPlugin();
@@ -397,12 +365,8 @@ function checkPlaywrightMcp(root, activeCli) {
     fix: [
       entry.plugins
         ? `No project-level MCP config, and no enabled plugin providing one, was detected for ${activeCli}.`
-        : entry.codex
-          ? `No Codex MCP config referencing @playwright/mcp was detected in ${codexConfigFile()}.`
         : `No project-level MCP config was detected for ${activeCli}.`,
-      activeCli === 'codex'
-        ? 'Add it with: codex mcp add playwright -- npx -y @playwright/mcp@latest'
-        : activeCli === 'opencode'
+      activeCli === 'opencode'
         ? 'Add the Playwright MCP server to opencode.json (see opencode.example.json) or pass --cli <name> if you actually run a different CLI.'
         : `Add the Playwright MCP server to your ${activeCli} config, or install a plugin that provides it (e.g. /plugin install playwright@claude-plugins-official).`,
     ],
@@ -475,7 +439,7 @@ function checkPrereq({ path, fix }) {
 }
 
 function checkFonts() {
-  const fontsDir = join(projectRoot, 'fonts');
+  const fontsDir = join(__dirname, 'fonts');
   if (!existsSync(fontsDir)) {
     return {
       pass: false,
@@ -623,6 +587,7 @@ async function main() {
     checkScanExtractor(projectRoot),
     ...USER_LAYER_PREREQS.map(checkPrereq),
     checkFonts(),
+    checkPersonalization(projectRoot),
     checkAutoDir('data'),
     checkPipelineFile(),
     checkAutoDir('output'),
@@ -668,12 +633,86 @@ async function main() {
     process.exit(1);
   } else {
     const warnNote = warnings > 0 ? ` (${warnings} warning${warnings === 1 ? '' : 's'} — see above)` : '';
-    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`${activeCli}\` to start.`);
+    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`claude\` (or \`opencode\`) to start.`);
     console.log('');
     console.log('Join the community: https://discord.gg/8pRpHETxa4');
     console.log('Read the manifesto: `npm run manifesto` — a new way of job searching is taking shape, and you are now part of it.');
     process.exit(0);
   }
+}
+
+// Personalization files that silently degrade output while still passing the
+// existence check. `modes/_custom.md` is deliberately absent: it holds optional
+// procedural house rules, so shipping it unedited is a valid end state. These
+// two are not —
+//   _profile.md unedited feeds the TEMPLATE AUTHOR's archetypes and North Star
+//     into every A-F evaluation, so offers are scored against a stranger.
+//   _brief.md unedited hands the triage first pass literal `{placeholders}`
+//     instead of the candidate's archetypes, comp floor and hard DQ criteria.
+// doctor auto-copies both from their templates on first run, so "the file
+// exists" is guaranteed and tells us nothing — only its CONTENT does.
+const PERSONALIZATION_FILES = [
+  {
+    path: 'modes/_profile.md',
+    template: 'modes/_profile.template.md',
+    impact: 'evaluations score against the template author\'s targeting, not yours',
+  },
+  {
+    path: 'modes/_brief.md',
+    template: 'modes/_brief.template.md',
+    impact: 'triage reads literal {placeholders} instead of your archetypes',
+  },
+];
+
+// Placeholder tokens the template itself ships, e.g. `{Your Name}`. Comparing
+// against the template's own set (rather than any `{...}` run) keeps braces the
+// user legitimately wrote — a code snippet, a JSON example — from false-firing.
+function templatePlaceholders(text) {
+  return new Set(text.match(/\{[^{}\n]{2,60}\}/g) || []);
+}
+
+// Returns [{ path, reason }] for personalization files still carrying template
+// content. Missing files are NOT reported here — that is `missing`'s job.
+function unpersonalizedFiles(root) {
+  const out = [];
+  for (const { path, template, impact } of PERSONALIZATION_FILES) {
+    const targetPath = join(root, ...path.split('/'));
+    const templatePath = join(root, ...template.split('/'));
+    if (!existsSync(targetPath) || !existsSync(templatePath)) continue;
+    let target, tpl;
+    try {
+      target = readFileSync(targetPath, 'utf-8');
+      tpl = readFileSync(templatePath, 'utf-8');
+    } catch {
+      continue; // unreadable → let the existence checks speak
+    }
+    if (target === tpl) {
+      out.push({ path, reason: 'still identical to the shipped template', impact });
+      continue;
+    }
+    const left = [...templatePlaceholders(tpl)].filter((p) => target.includes(p));
+    if (left.length > 0) {
+      out.push({
+        path,
+        reason: `still has ${left.length} unfilled placeholder${left.length === 1 ? '' : 's'} (e.g. ${left[0]})`,
+        impact,
+      });
+    }
+  }
+  return out;
+}
+
+function checkPersonalization(root) {
+  const stale = unpersonalizedFiles(root);
+  if (stale.length === 0) {
+    return { label: 'Personalization files customized', pass: true };
+  }
+  return {
+    label: `Personalization incomplete: ${stale.map((s) => s.path).join(', ')}`,
+    warn: true,
+    fix: stale.flatMap((s) => [`${s.path} — ${s.reason}; ${s.impact}`,
+      `  ask your agent: "personalize ${s.path} from my CV"`]),
+  };
 }
 
 // Single source of truth for the cold-start state: the same four user-layer
@@ -690,7 +729,8 @@ function onboardingState(root) {
   ];
   for (const { target, template } of templates) {
     const targetPath = join(root, ...target.split('/'));
-    const templatePath = join(root, ...template.split('/'));
+    const rootTemplatePath = join(root, ...template.split('/'));
+    const templatePath = existsSync(rootTemplatePath) ? rootTemplatePath : join(__dirname, ...template.split('/'));
     if (!existsSync(targetPath) && existsSync(templatePath)) {
       try {
         copyFileSync(templatePath, targetPath);
@@ -708,11 +748,13 @@ function onboardingState(root) {
   const { cli: activeCli, source: cliSource, warning: cliWarning } = resolveActiveCli();
 
   const mcpCheck = checkPlaywrightMcp(root, activeCli);
+  const unpersonalized = unpersonalizedFiles(root);
   const bakCheck = checkTrackedBakFiles(root);
   const warnings = [
     ...(cliWarning ? [cliWarning] : []),
     ...(mcpCheck?.warn ? [`${mcpCheck.label}\n→ ${[].concat(mcpCheck.fix || []).join('\n  ')}`] : []),
     ...(bakCheck.warn ? [`${bakCheck.label}\n→ ${[].concat(bakCheck.fix || []).join('\n  ')}`] : []),
+    ...unpersonalized.map((u) => `${u.path} ${u.reason} — ${u.impact}\n→ Personalize it from cv.md before running evaluations.`),
   ];
 
   const playwrightMcp = activeCli !== 'unknown' && MCP_CONFIGS.find((c) => c.cli === activeCli)
@@ -730,6 +772,11 @@ function onboardingState(root) {
   return {
     onboardingNeeded: missing.length > 0,
     missing,
+    // Non-blocking by design: career-ops is meant to work out of the box, so an
+    // unedited personalization file must not gate the whole system. It DOES have
+    // to be visible — surfaced as its own field the agent can branch on rather
+    // than a string it has to pattern-match out of `warnings`.
+    unpersonalized,
     warnings,
     autoCopied,
     plugins,

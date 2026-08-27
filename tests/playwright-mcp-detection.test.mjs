@@ -23,21 +23,11 @@ const EMPTY_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'co-mcp-emptycfg-'));
 
 function runDoctor(cwd, args, env) {
   try {
-    const childEnv = {
-      ...process.env,
-      CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR,
-      CODEX_HOME: EMPTY_CONFIG_DIR,
-    };
-    // test-all.mjs imports dotenv-using modules before discovered tests run.
-    // An owner preference loaded in that parent must not alter a default-CLI
-    // fixture.
-    delete childEnv.CAREER_OPS_CLI;
-    Object.assign(childEnv, env);
     const out = execFileSync(NODE, [DOCTOR, '--json', '--target', cwd, ...args], {
       cwd,
       // Order matters: the empty dir must override an ambient CLAUDE_CONFIG_DIR
       // from the developer's own shell, while a scenario's explicit env still wins.
-      env: childEnv,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -240,7 +230,10 @@ try {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
 
-  // 9. --cli codex with no config → warning.
+  // 9. --cli codex → known CLI without MCP scanner; warn (case B).
+  //    active_cli is preserved verbatim ("codex"), cli_source='flag',
+  //    playwright_mcp is {} (not claude), and the "skipped for CLI: codex"
+  //    warning fires — distinct from case A (unknown CLI), which is silent.
   {
     const dir = mkdtempSync(join(tmpdir(), 'co-mcp-9-'));
     try {
@@ -248,42 +241,17 @@ try {
       if (state._error) { fail(`#9 doctor crashed: ${state._error}`); }
       else if (state.active_cli === 'codex'
           && state.cli_source === 'flag'
-          && state.playwright_mcp?.codex === false
+          && Object.keys(state.playwright_mcp || {}).length === 0
           && Array.isArray(state.warnings)
-          && state.warnings.some((w) => /active CLI: codex/i.test(w))) {
-        pass('--cli codex without config → warning');
+          && state.warnings.some((w) => /Playwright MCP check skipped for CLI: codex/i.test(w))) {
+        pass('--cli codex → known but unsupported, warn "skipped for CLI: codex"');
       } else {
         fail(`#9 unexpected state: ${JSON.stringify(state)}`);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
 
-  // 10. --cli codex with a global config.toml → no warning.
-  {
-    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-10-'));
-    const codexHome = mkdtempSync(join(tmpdir(), 'co-mcp-codex-home-'));
-    try {
-      writeFileSync(join(codexHome, 'config.toml'),
-        '[mcp_servers.playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@latest"]\n');
-      const state = runDoctor(dir, ['--cli', 'codex'], { CODEX_HOME: codexHome });
-      if (!expectWarn(state, '#10 codex config')) {
-        // already failed
-      } else if (state.active_cli === 'codex'
-          && state.cli_source === 'flag'
-          && state.playwright_mcp?.codex === true
-          && Array.isArray(state.warnings)
-          && !state.warnings.some((w) => PLAYWRIGHT_RE.test(w))) {
-        pass('--cli codex + config.toml → no warning');
-      } else {
-        fail(`#10 unexpected state: ${JSON.stringify(state)}`);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
-    }
-  }
-
-  // 11. --cli vim (typo) → resolveActiveCli returns cli='unknown', source='flag'
+  // 10. --cli vim (typo) → resolveActiveCli returns cli='unknown', source='flag'
   //     and emits one warning naming the bad value. MCP check is silent (the
   //     CLI-resolution layer already warned; MCP has nothing to add).
   {
