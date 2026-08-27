@@ -237,6 +237,10 @@ const EXEMPT = new Map([
   // Asserts that a bash-embedded node snippet reads its input file via ITS OWN
   // argv[1] (injection safety, not a main-guard); the literal lives in strings.
   ['tests/batch-runner-jd-prefetch.test.mjs', 'asserts another script\u2019s argv[1] usage in strings'],
+  // Owner-local tools deliberately remain independent of updater-owned system
+  // modules. Their local comparisons are therefore explicit exemptions.
+  ['local-tools/app-pack-v1-overlay.mjs', 'owner-local overlay installer has no system-layer dependency'],
+  ['local-tools/application-package.mjs', 'owner-local packager is deliberately system-layer independent'],
 ]);
 
 function entryRefViolations(src) {
