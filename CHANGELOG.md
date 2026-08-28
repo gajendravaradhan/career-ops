@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.30.2](https://github.com/gajendravaradhan/career-ops/compare/career-ops-v1.30.1...career-ops-v1.30.2) (2026-08-28)
+
+
+### Bug Fixes
+
+* **ci:** avoid duplicate SBOM release upload ([776bfbb](https://github.com/gajendravaradhan/career-ops/commit/776bfbb486263b72420bb0fbeeeab892159b1942))
+
 ## 1.30.1 (2026-08-28)
 
 
