@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
@@ -17,9 +18,33 @@ import { WorkerPills } from "@/components/jobs/worker-pills";
 import { UsageMeter } from "@/components/usage-meter";
 import { instrumentSerif } from "@/lib/fonts";
 import { NAV_ITEMS, isActivePath } from "@/lib/nav-items";
+import { resolveCliId } from "@/lib/saved-cli";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const [cliResolved, setCliResolved] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    resolveCliId(controller.signal).finally(() => {
+      clearTimeout(timeout);
+      if (active) setCliResolved(true);
+    });
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
+  // Several child surfaces read the saved CLI synchronously. Mount them only
+  // after first-run auto-detection has either persisted a choice or timed out.
+  if (!cliResolved) {
+    return <main className="grid min-h-screen place-items-center text-sm text-muted">Detecting local CLI…</main>;
+  }
+
   return (
     <JobsProvider>
       <PipelineProvider>

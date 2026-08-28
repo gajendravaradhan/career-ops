@@ -133,12 +133,14 @@ func ParseApplications(careerOpsPath string) []model.CareerApplication {
 			Role:    at("role"),
 			Status:  at("status"),
 			HasPDF:  strings.Contains(at("pdf"), "\u2705"),
+			JobURL:  at("url"),
 		}
 
 		// Parse score from the Score column.
 		app.ScoreRaw = at("score")
 		if sm := reScoreValue.FindStringSubmatch(at("score")); sm != nil {
 			app.Score, _ = strconv.ParseFloat(sm[1], 64)
+			app.HasScore = true
 		}
 
 		// Parse report link. Tracker links are written relative to the
@@ -171,6 +173,12 @@ func ParseApplications(careerOpsPath string) []model.CareerApplication {
 	reportNumURLs := loadJobURLs(careerOpsPath)
 
 	for i := range apps {
+		// A tracker URL is the most direct source and is available even for
+		// triage-only rows with no report or batch artifacts. The enrichment
+		// tiers below are fallbacks for older tracker layouts.
+		if apps[i].JobURL != "" {
+			continue
+		}
 		if apps[i].ReportPath == "" {
 			continue
 		}
@@ -497,7 +505,7 @@ func ComputeMetrics(apps []model.CareerApplication) model.PipelineMetrics {
 		status := NormalizeStatus(app.Status)
 		m.ByStatus[status]++
 
-		if app.Score > 0 {
+		if app.HasScore || app.Score > 0 {
 			totalScore += app.Score
 			scored++
 			if app.Score > m.TopScore {
@@ -628,7 +636,7 @@ var trackerHeaderAliases = map[string]string{
 	"#": "num", "num": "num", "date": "date",
 	"company": "company", "empresa": "company",
 	"via": "via", "role": "role", "puesto": "role",
-	"location": "location", "score": "score", "status": "status",
+	"location": "location", "url": "url", "score": "score", "status": "status",
 	"pdf": "pdf", "report": "report", "notes": "notes",
 }
 
@@ -938,20 +946,96 @@ func StatusPriority(status string) int {
 	}
 }
 
-// ComputeProgressMetrics computes progress-oriented analytics from applications.
+// statusStageRank returns the deepest cumulative funnel stage proved by a
+// status snapshot. A rejection is itself a response, while terminal success
+// proves every preceding stage.
+func statusStageRank(status string) int {
+	switch NormalizeStatus(status) {
+	case "applied":
+		return 1
+	case "responded", "rejected":
+		return 2
+	case "interview":
+		return 3
+	case "offer":
+		return 4
+	case "hired":
+		return 5
+	default:
+		return 0
+	}
+}
+
+// loadHistoricalStageRanks folds the append-only status ledger into the
+// deepest stage each tracker row has ever reached. Malformed/torn lines are
+// ignored because progress analytics must remain available even after a
+// partial external write.
+func loadHistoricalStageRanks(careerOpsPath string) map[int]int {
+	trackerPath := resolveTrackerPath(careerOpsPath)
+	content, err := os.ReadFile(filepath.Join(filepath.Dir(trackerPath), "status-log.tsv"))
+	if err != nil {
+		return nil
+	}
+
+	ranks := make(map[int]int)
+	for _, line := range strings.Split(strings.ReplaceAll(string(content), "\r", ""), "\n") {
+		cols := strings.Split(line, "\t")
+		if len(cols) < 4 || strings.TrimSpace(cols[1]) == "" {
+			continue
+		}
+		num, err := strconv.Atoi(strings.TrimSpace(cols[0]))
+		if err != nil || num <= 0 || strings.TrimSpace(cols[2]) == "" || strings.TrimSpace(cols[3]) == "" {
+			continue
+		}
+		for _, status := range cols[2:4] {
+			if rank := statusStageRank(status); rank > ranks[num] {
+				ranks[num] = rank
+			}
+		}
+	}
+	return ranks
+}
+
+// ComputeProgressMetrics computes progress-oriented analytics from the current
+// tracker snapshot. Call ComputeProgressMetricsWithHistory when a data root is
+// available so terminal rows retain stages recorded in status-log.tsv.
 func ComputeProgressMetrics(apps []model.CareerApplication) model.ProgressMetrics {
+	return computeProgressMetrics(apps, nil)
+}
+
+// ComputeProgressMetricsWithHistory augments the current tracker snapshot with
+// the append-only status transition ledger next to the resolved tracker.
+func ComputeProgressMetricsWithHistory(apps []model.CareerApplication, careerOpsPath string) model.ProgressMetrics {
+	return computeProgressMetrics(apps, loadHistoricalStageRanks(careerOpsPath))
+}
+
+func computeProgressMetrics(apps []model.CareerApplication, historicalRanks map[int]int) model.ProgressMetrics {
 	pm := model.ProgressMetrics{}
 
-	// Count by normalized status
-	statusCounts := make(map[string]int)
 	var totalScore float64
 	var scored int
+	var applied, responded, interview, offer int
 
 	for _, app := range apps {
 		norm := NormalizeStatus(app.Status)
-		statusCounts[norm]++
+		rank := statusStageRank(norm)
+		if historicalRanks[app.Number] > rank {
+			rank = historicalRanks[app.Number]
+		}
+		if rank >= 1 {
+			applied++
+		}
+		if rank >= 2 {
+			responded++
+		}
+		if rank >= 3 {
+			interview++
+		}
+		if rank >= 4 {
+			offer++
+		}
 
-		if app.Score > 0 {
+		if app.HasScore || app.Score > 0 {
 			totalScore += app.Score
 			scored++
 			if app.Score > pm.TopScore {
@@ -959,9 +1043,7 @@ func ComputeProgressMetrics(apps []model.CareerApplication) model.ProgressMetric
 			}
 		}
 
-		// A hire proves an offer was received and accepted, so it counts here
-		// too — same reasoning as everOffer in stats.mjs's computeFunnel().
-		if norm == "offer" || norm == "hired" {
+		if rank >= 4 {
 			pm.TotalOffers++
 		}
 		if norm != "skip" && norm != "rejected" && norm != "discarded" {
@@ -973,18 +1055,9 @@ func ComputeProgressMetrics(apps []model.CareerApplication) model.ProgressMetric
 		pm.AvgScore = totalScore / float64(scored)
 	}
 
-	// Funnel: each stage counts all apps that reached at least that stage.
-	// An app in "interview" has passed through evaluated -> applied -> responded -> interview.
-	// "hired" is terminal success and proves every earlier stage (a landed job
-	// proves the offer, the interviews, the response, and the submission), so it
-	// counts into all four tiers — matching computeFunnel() in stats.mjs, the
-	// canonical funnel definition, whose docstring already describes this exact
-	// math as mirroring this function.
+	// Funnel: each stage counts all apps that reached at least that stage. Ledger
+	// history preserves deeper stages after a row becomes Rejected or Discarded.
 	total := len(apps)
-	applied := statusCounts["applied"] + statusCounts["responded"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"] + statusCounts["rejected"]
-	responded := statusCounts["responded"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"]
-	interview := statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"]
-	offer := statusCounts["offer"] + statusCounts["hired"]
 
 	pm.FunnelStages = []model.FunnelStage{
 		{Label: "Evaluated", Count: total, Pct: 100.0},
@@ -1004,7 +1077,7 @@ func ComputeProgressMetrics(apps []model.CareerApplication) model.ProgressMetric
 	// Score distribution
 	buckets := [5]int{} // 0: 4.5-5.0, 1: 4.0-4.4, 2: 3.5-3.9, 3: 3.0-3.4, 4: <3.0
 	for _, app := range apps {
-		if app.Score <= 0 {
+		if !app.HasScore && app.Score <= 0 {
 			continue
 		}
 		switch {

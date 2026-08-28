@@ -25,8 +25,10 @@ import { normalizeTextKey } from "./normalize-text-key.mjs";
  *  — v2 stripped every non-ASCII letter, so "Škoda" and "Koda" hashed to the
  *  IDENTICAL key and one silently wore the other's logo forever (requirement 2,
  *  violated). Bumping discards any v2 entry poisoned this way rather than
- *  leaving it reachable under an unchanged "koda" key. */
-export const COMPANY_KEY_VERSION = "v3";
+ *  leaving it reachable under an unchanged "koda" key.
+ *  v4: company-domain guesses fold accented Latin letters instead of deleting
+ *  them, invalidating permanent misses stored by the old resolver. */
+export const COMPANY_KEY_VERSION = "v4";
 
 /** Cache key for a company name, or null if the name carries nothing to key on.
  *

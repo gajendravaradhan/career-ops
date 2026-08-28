@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import * as yaml from "js-yaml";
 import { atomicWrite } from "@/lib/core/safe-write";
 import { parseApplications } from "@/lib/tracker-table.mjs";
 // One definition of the `{n}-RESERVED.md` convention, shared with
@@ -27,6 +28,52 @@ export function careerOpsRoot(): string {
  */
 export function rootScript(nameNoExt: string): string {
   return path.join(careerOpsRoot(), `${nameNoExt}.mjs`);
+}
+
+export type LanguageConfig = {
+  output: string;
+  modesDir: string;
+  evalModeFile: string;
+};
+
+const MODES_DIR_RE = /^modes(?:\/[A-Za-z0-9_-]+)?$/;
+const EVAL_MODE_TITLE_RE = /A[-\u2010-\u2015][FG]/;
+const DEFAULT_EVAL_MODE = "modes/oferta.md";
+
+function resolveEvalModeFile(root: string, modesDir: string): string {
+  if (modesDir === "modes") return DEFAULT_EVAL_MODE;
+  let names: string[];
+  try { names = fs.readdirSync(path.join(root, modesDir)); } catch { return DEFAULT_EVAL_MODE; }
+  for (const name of names.sort()) {
+    if (!name.endsWith(".md") || name.startsWith("_") || name === "README.md") continue;
+    try {
+      const firstLine = fs.readFileSync(path.join(root, modesDir, name), "utf8").split("\n", 1)[0] ?? "";
+      if (EVAL_MODE_TITLE_RE.test(firstLine)) return `${modesDir}/${name}`;
+    } catch { /* keep looking */ }
+  }
+  return DEFAULT_EVAL_MODE;
+}
+
+/** Resolve the independent prose-language and market-mode settings. */
+export function readLanguageConfig(): LanguageConfig {
+  const root = careerOpsRoot();
+  let output = "en";
+  let modesDir = "modes";
+  try {
+    const parsed = yaml.load(fs.readFileSync(path.join(root, "config", "profile.yml"), "utf8"));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const language = (parsed as Record<string, unknown>).language;
+      if (language && typeof language === "object" && !Array.isArray(language)) {
+        const config = language as Record<string, unknown>;
+        if (typeof config.output === "string" && config.output.trim()) output = config.output.trim();
+        if (typeof config.modes_dir === "string") {
+          const candidate = config.modes_dir.trim().replace(/\/+$/, "");
+          if (MODES_DIR_RE.test(candidate)) modesDir = candidate;
+        }
+      }
+    }
+  } catch { /* missing/malformed profile uses safe defaults */ }
+  return { output, modesDir, evalModeFile: resolveEvalModeFile(root, modesDir) };
 }
 
 // Feature-detect the core's `tracker.mjs delete --num` row-delete (#1200) by probing
@@ -148,6 +195,11 @@ export function readApplications(): Application[] {
   const md = read("data/applications.md");
   if (!md) return [];
   return parseApplications(md, careerOpsRoot());
+}
+
+/** Raw append-only transition ledger for history-aware funnel analytics. */
+export function readStatusLog(): string {
+  return read("data/status-log.tsv") ?? "";
 }
 
 /**

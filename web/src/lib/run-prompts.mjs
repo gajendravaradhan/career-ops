@@ -45,14 +45,19 @@ const SAFE_COMPANY_NAME = /^[\p{L}\p{N} .,&'()+/-]+$/u;
  * inline instead of writing it), and a guard that greps route.ts for the marker
  * text matched the route's own comments instead. See test-all.mjs §55.6.
  *
- * @param {{kind: string, input: string, memory: string, today: string}} args
+ * @param {{kind: string, input: string, memory: string, today: string, postedAt?: string, lang?: {output: string, modesDir: string, evalModeFile: string}}} args
  * @returns {string}
  */
 /** ISO calendar date, the only form the dashboard's POSTED column parses. */
 const ISO_DATE_RE = /^20\d{2}-\d{2}-\d{2}$/;
 
-export function buildPrompt({ kind, input, memory, today, postedAt }) {
-  const mem = memory.trim() ? `\n\nDurable notes about the user (from their profile):\n${memory.trim()}\n` : "";
+export function buildPrompt({ kind, input, memory, today, postedAt, lang }) {
+  const resolvedLang = lang ?? { output: "en", modesDir: "modes", evalModeFile: "modes/oferta.md" };
+  const marketNote = resolvedLang.modesDir === "modes"
+    ? ""
+    : ` Also read ${resolvedLang.modesDir}/_shared.md for this market's vocabulary and local concepts; explain them in the output language when needed.`;
+  const languageDirective = `\n\nWrite all human-facing output in "${resolvedLang.output}" regardless of the language of these instructions or the job description.${marketNote}\n`;
+  const mem = (memory.trim() ? `\n\nDurable notes about the user (from their profile):\n${memory.trim()}\n` : "") + languageDirective;
   if (kind === "research") {
     return `You are investigating the user's OWN work / portfolio to surface job-search-relevant strengths, headless. Investigate the target (use WebFetch for URLs; read local files if referenced) and report: what it is, why it is impressive, and how to leverage it in their job search — which roles/claims it supports and how to frame it on a CV. Be specific, honest, and encouraging. Report only: never submit, send, or click Apply anywhere, and contact no one — you are investigating the user's own work, not acting on it.${mem}
 
@@ -122,7 +127,7 @@ End with EXACTLY one final line: VERDICT: {5 if now live, else 1}/5 — {what yo
   // precisely so they can't be misread as the row's LOCATION.
   return `You are running the OFFICIAL career-ops job evaluation, HEADLESS, on the user's own machine. Today is ${today}. Run the REAL career-ops evaluation — do NOT improvise your own scoring.
 
-1. Read modes/oferta.md and follow it EXACTLY (blocks A–F, G posting-legitimacy, and the Machine Summary). Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md. Use WebFetch to read the posting (you are headless — Playwright is unavailable, so use WebFetch and mark the report header "Verification: unconfirmed (batch mode)").
+1. Read ${resolvedLang.evalModeFile} and follow it EXACTLY (blocks A–F, G posting-legitimacy, and the Machine Summary). Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md. Use WebFetch to read the posting (you are headless — Playwright is unavailable, so use WebFetch and mark the report header "Verification: unconfirmed (batch mode)").
 
 2. Persist the result CANONICALLY so the web and the CLI share ONE source of truth:
    a. Reserve a report number: run \`node reserve-report-num.mjs\` — its stdout is a 3-digit number (e.g. 035).
@@ -138,4 +143,3 @@ VERDICT: {score}/5 — {reason in 12 words or fewer}
 
 Posting URL: ${input}`;
 }
-

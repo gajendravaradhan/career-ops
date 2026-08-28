@@ -131,12 +131,12 @@ const twoPassManifestChecks = [
     pattern: /CAREER_OPS_UPDATE_REEXEC/,
   },
   {
-    name: 'apply resolves the re-exec checkout closure from FETCH_HEAD (#1245)',
-    pattern: /resolveReexecCheckout\('FETCH_HEAD',\s*'update-system\.mjs'\)/,
+    name: 'apply resolves the re-exec checkout closure from its pinned target (#1245/#3052)',
+    pattern: /resolveReexecCheckout\(targetRef,\s*'update-system\.mjs'\)/,
   },
   {
-    name: 'apply checks out the resolved re-exec files from FETCH_HEAD (#1245)',
-    pattern: /git\('checkout',\s*'FETCH_HEAD',\s*'--',\s*\.\.\.reexecFiles\)/,
+    name: 'apply checks out the resolved re-exec files from its pinned target (#1245/#3052)',
+    pattern: /git\('checkout',\s*targetRef,\s*'--',\s*\.\.\.reexecFiles\)/,
   },
   {
     name: 're-exec fallback still covers the skill-entrypoints import (#1245)',
@@ -151,8 +151,8 @@ const twoPassManifestChecks = [
     pattern: /CAREER_OPS_UPDATE_BACKUP_BRANCH/,
   },
   {
-    name: 'apply reads the target updater manifest from FETCH_HEAD',
-    pattern: /git\('show',\s*'FETCH_HEAD:update-system\.mjs'\)/,
+    name: 'apply reads the target updater manifest from its pinned target',
+    pattern: /git\('show',\s*`\$\{targetRef\}:update-system\.mjs`\)/,
   },
   {
     name: 'apply extracts SYSTEM_PATHS from the target updater',
@@ -187,7 +187,7 @@ const twoPassManifestChecks = [
     // paths, so everything added upstream since is silently absent and apply
     // still printed "Update complete" (#1998).
     name: 'apply verifies the target manifest materialized before claiming success (#1998)',
-    pattern: /missingFromTargetManifest\(remoteSystemPaths\)/,
+    pattern: /missingFromTargetManifest\(remoteSystemPaths, targetRef\)/,
   },
   {
     name: 'an incomplete apply exits non-zero instead of reporting success (#1998)',
@@ -199,13 +199,13 @@ const twoPassManifestChecks = [
     // The trailing spread is the #2337 preserve-exclusions; the property this
     // pins is the runner (gitQuiet, not git) and the ref, not the arity.
     name: 'per-path checkout pipes stderr so expected skips stay quiet (#1998)',
-    pattern: /gitQuiet\('checkout',\s*'FETCH_HEAD',\s*'--',\s*path(?:,\s*\.\.\.\w+)?\)/,
+    pattern: /gitQuiet\('checkout',\s*targetRef,\s*'--',\s*path(?:,\s*\.\.\.\w+)?\)/,
   },
   {
     // #2337: a system file this install edited must be listed and backed up
     // before the checkout, not overwritten in silence.
     name: 'locally edited system files are detected before checkout (#2337)',
-    pattern: /const atRisk = locallyModifiedSystemFiles\(updatePaths, 'FETCH_HEAD'\)/,
+    pattern: /const atRisk = locallyModifiedSystemFiles\(updatePaths, targetRef\)/,
   },
   {
     name: 'the local copy is saved as .bak before any overwrite (#2337)',
@@ -230,7 +230,7 @@ const twoPassManifestChecks = [
     // even when the target added files under it — the verification must recurse
     // into directory entries against FETCH_HEAD (#1998 CodeRabbit review).
     name: 'manifest verification recurses into directory entries via ls-tree (#1998)',
-    pattern: /ls-tree', '-r', '--name-only', 'FETCH_HEAD'[\s\S]{0,400}?treeFiles\.some\(f => !existsSync/,
+    pattern: /ls-tree', '-r', '--name-only', targetRef[\s\S]{0,400}?treeFiles\.some\(f => !existsSync/,
   },
   {
     // A checkout failure is only an expected skip when the path is truly absent

@@ -42,6 +42,28 @@ try {
     fail(`parseJobstreetItem returned ${JSON.stringify(parsed)}`);
   }
 
+  const auParsed = parseJobstreetItem(
+    { id: '94036672', title: 'Strategy Consultant' },
+    'https://www.seek.com.au',
+    'Co',
+  );
+  if (auParsed?.url === 'https://www.seek.com.au/job/94036672') {
+    pass('parseJobstreetItem builds the non-Indonesian SEEK detail path');
+  } else {
+    fail(`parseJobstreetItem seek.com.au url was ${JSON.stringify(auParsed?.url)}`);
+  }
+
+  const sgParsed = parseJobstreetItem(
+    { id: '94244276', title: 'Analyst' },
+    'https://sg.jobstreet.com',
+    'Co',
+  );
+  if (sgParsed?.url === 'https://sg.jobstreet.com/job/94244276') {
+    pass('parseJobstreetItem builds the non-Indonesian Jobstreet detail path');
+  } else {
+    fail(`parseJobstreetItem sg.jobstreet.com url was ${JSON.stringify(sgParsed?.url)}`);
+  }
+
   // parseJobstreetItem — uses companyName fallback when advertiser.description is absent
   const noAdvertiserItem = {
     id: '2',
@@ -181,4 +203,3 @@ try {
 } catch (e) {
   fail(`jobstreet provider tests crashed: ${e.message}`);
 }
-

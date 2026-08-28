@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cumulativeTiles } from "../../src/lib/funnel-tiles.mjs";
+import { cumulativeTiles, cumulativeTilesWithHistory } from "../../src/lib/funnel-tiles.mjs";
 
 test("an offer-holder has already interviewed", () => {
   // The bug: a snapshot count reported interviews=0 here, so the tile showed
@@ -38,13 +38,26 @@ test("stages that never reached an interview are not counted", () => {
   assert.equal(t.offers, 0);
 });
 
-test("a rejection is not folded in — its stage is unknowable from a snapshot", () => {
-  // stats.mjs calls the middle stages lower bounds for exactly this reason: a
-  // Rejected row that never got a reply is indistinguishable from one rejected
-  // after onsites, so counting it would overstate the funnel.
+test("a rejection alone does not claim an interview", () => {
+  // Rejected proves Responded, but this surface only shows Interview/Offer.
   const t = cumulativeTiles(["REJECTED", "REJECTED"]);
   assert.equal(t.interviews, 0);
   assert.equal(t.offers, 0);
+});
+
+test("ledger history preserves interview and offer achievements after terminal statuses", () => {
+  const apps = [
+    { n: "1", status: "REJECTED" },
+    { n: "2", status: "DISCARDED" },
+    { n: "3", status: "REJECTED" },
+  ];
+  const ledger = [
+    "1\t2026-08-01\tINTERVIEW\tREJECTED\tset-status\t",
+    "2\t2026-08-02\tOFFER\tDISCARDED\tset-status\t",
+    "junk\t2026-08-03\tOFFER\tHIRED\tset-status\t",
+    "99\t2026-08-03\tOFFER\tHIRED\tset-status\tremoved row",
+  ].join("\n");
+  assert.deepEqual(cumulativeTilesWithHistory(apps, ledger), { interviews: 2, offers: 1 });
 });
 
 test("an empty or absent pipeline is zero, not a crash", () => {

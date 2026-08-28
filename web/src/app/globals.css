@@ -195,7 +195,7 @@ html {
   padding: 0.55rem 0.75rem;
   vertical-align: top;
   border-top: 1px solid var(--border);
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 .report-prose tbody tr:hover { background: color-mix(in srgb, var(--fg) 3%, transparent); }
 .report-prose img { border-radius: 0.5rem; }

@@ -20,7 +20,7 @@
  */
 
 import { execFile, execFileSync, execSync } from 'child_process';
-import { copyFileSync, readFileSync, writeFileSync, existsSync, unlinkSync, rmSync, realpathSync } from 'fs';
+import { copyFileSync, readFileSync, writeFileSync, existsSync, unlinkSync, rmSync, realpathSync, lstatSync } from 'fs';
 import { join, dirname, resolve, posix as pathPosix } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -63,6 +63,7 @@ export const REEXEC_BUFFER_TIMEOUT_MS = parsePositiveInt(process.env.CAREER_OPS_
 // System layer paths — ONLY these files get updated
 const SYSTEM_PATHS = [
   '.gitattributes',
+  'web/',
   'modes/README.md',
   'modes/_shared.md',
   'modes/_writing.md',
@@ -163,6 +164,7 @@ const SYSTEM_PATHS = [
   'lib/gemini-node-floor.mjs',
   'lib/local-today.mjs',
   'lib/is-main-module.mjs',
+  'lib/mjs-files.mjs',
   'lib/outcome-dir.mjs',
   'lib/outcome-types.mjs',
   'lib/latex-escape.mjs',
@@ -731,6 +733,36 @@ function gitQuiet(...args) {
 }
 
 /**
+ * Return the enclosing repository when `root` is inside a different git
+ * worktree, otherwise null. A copied/ZIP install nested in another repository
+ * must never fetch, branch, or check out files in that outer repository.
+ */
+export function gitToplevelMismatch(root = ROOT) {
+  let toplevel;
+  try {
+    toplevel = gitIn(root, 'rev-parse', '--show-toplevel');
+  } catch {
+    return null;
+  }
+  if (!toplevel) return null;
+  const canonicalize = realpathSync.native ?? realpathSync;
+  try {
+    return canonicalize(toplevel) === canonicalize(root) ? null : toplevel;
+  } catch {
+    return resolve(toplevel) === resolve(root) ? null : toplevel;
+  }
+}
+
+function assertOwnGitToplevel() {
+  const outer = gitToplevelMismatch();
+  if (outer) {
+    throw new Error(
+      `career-ops at ${ROOT} is not its own git checkout; update operations would modify the enclosing repository at ${outer}. Nothing was changed. Clone ${CANONICAL_REPO} as a standalone checkout and move only your user-layer files into it.`,
+    );
+  }
+}
+
+/**
  * Paths the target manifest ships that did not materialize on disk.
  *
  * apply() reports success without checking that the checkout loop actually
@@ -741,7 +773,7 @@ function gitQuiet(...args) {
  * @param {string[]} targetPaths - SYSTEM_PATHS read from the target updater.
  * @returns {string[]} Entries present in FETCH_HEAD but absent locally.
  */
-function missingFromTargetManifest(targetPaths) {
+function missingFromTargetManifest(targetPaths, targetRef = 'FETCH_HEAD') {
   const missing = [];
   for (const path of targetPaths) {
     const spec = path.endsWith('/') ? path.slice(0, -1) : path;
@@ -754,7 +786,7 @@ function missingFromTargetManifest(targetPaths) {
     if (path.endsWith('/')) {
       let treeFiles = [];
       try {
-        treeFiles = gitQuiet('ls-tree', '-r', '--name-only', 'FETCH_HEAD', '--', spec)
+        treeFiles = gitQuiet('ls-tree', '-r', '--name-only', targetRef, '--', spec)
           .split('\n').map(s => s.trim()).filter(Boolean);
       } catch {
         continue; // FETCH_HEAD unreadable for this spec — treat as stale, not missing
@@ -768,11 +800,47 @@ function missingFromTargetManifest(targetPaths) {
     // Only count it as missing when the target actually ships it — a manifest
     // entry the target no longer carries is a stale entry, not a failed update.
     try {
-      gitQuiet('cat-file', '-e', `FETCH_HEAD:${spec}`);
+      gitQuiet('cat-file', '-e', `${targetRef}:${spec}`);
       missing.push(path);
     } catch { /* absent upstream too — nothing to materialize */ }
   }
   return missing;
+}
+
+/**
+ * Fetch and pin upstream main to one immutable commit, or validate the pinned
+ * commit carried across updater self-reexec. No later apply step should resolve
+ * FETCH_HEAD again (#3052).
+ */
+export function resolvePinnedUpdateTarget({ reexec = false, suppliedSha = '', ctx = {} } = {}) {
+  const runGit = ctx.git || git;
+  if (!reexec) {
+    runGit('fetch', '--no-tags', CANONICAL_REPO, 'refs/heads/main');
+    return runGit('rev-parse', '--verify', 'FETCH_HEAD^{commit}').trim();
+  }
+
+  const candidate = String(suppliedSha || '').trim();
+  if (!/^[0-9a-f]{40,64}$/i.test(candidate)) {
+    throw new Error('Updater self-reexec is missing a valid pinned target commit. Nothing was changed.');
+  }
+  const resolved = runGit('rev-parse', '--verify', `${candidate}^{commit}`).trim();
+  if (resolved.toLowerCase() !== candidate.toLowerCase()) {
+    throw new Error(`Pinned update target changed from ${candidate} to ${resolved}; refusing to continue.`);
+  }
+  return resolved;
+}
+
+/** Read and validate VERSION at a pinned commit, refusing silent downgrades. */
+export function validatePinnedTargetVersion(local, targetRef, ctx = {}) {
+  const runGit = ctx.git || git;
+  const raw = runGit('show', `${targetRef}:VERSION`);
+  const match = parseVersionFile(raw).match(SEMVER_RE);
+  if (!match) throw new Error(`Update target ${targetRef} has no valid VERSION; refusing to modify files.`);
+  const target = match[1];
+  if (compareVersions(target, local) < 0) {
+    throw new Error(`Target VERSION ${target} is older than installed VERSION ${local}; refusing to downgrade.`);
+  }
+  return target;
 }
 
 // Must read UNTRIMMED output: gitIn() trims the whole buffer, and the
@@ -788,22 +856,25 @@ function missingFromTargetManifest(targetPaths) {
 // nothing (same bug class as #3048 — a safety check comparing a mangled path).
 export function parsePorcelainStatus(status) {
   if (!status) return [];
-  return status
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      // git never writes a CR inside a path, so a line-terminal '\r' is always
-      // the CRLF half of the line ending, never a path character.
-      const clean = line.endsWith('\r') ? line.slice(0, -1) : line;
-      return {
-        code: clean.slice(0, 2),
-        path: clean.slice(3),
-      };
-    });
+  const fields = status.split('\0');
+  const entries = [];
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if (!field) continue;
+    const code = field.slice(0, 2);
+    entries.push({ code, path: field.slice(3) });
+    // With -z, rename/copy records carry the destination in this field and
+    // the origin in the next NUL field. Both paths matter to safety checks.
+    if (code[0] === 'R' || code[0] === 'C') {
+      const origin = fields[++i];
+      if (origin) entries.push({ code, path: origin });
+    }
+  }
+  return entries;
 }
 
 export function gitStatusEntries(root = ROOT) {
-  return parsePorcelainStatus(gitRawIn(root, 'status', '--porcelain'));
+  return parsePorcelainStatus(gitRawIn(root, 'status', '--porcelain', '-z'));
 }
 
 export function extractArrayFromSource(source, name) {
@@ -1203,9 +1274,54 @@ export function removeAdditionsNotInHead(pathspec, protectedPaths = new Set(), c
   }
 }
 
-function addPaths(paths) {
+export function isTracked(path, ctx = {}) {
+  const runGit = ctx.git || git;
+  return runGit('--literal-pathspecs', 'ls-files', '--', path).trim().length > 0;
+}
+
+/** Expand manifest directories to the exact files shipped by the target tree. */
+export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
+  const runGit = ctx.gitRaw || ctx.git || ((...args) => gitRawIn(ROOT, ...args));
+  const seen = new Set();
+  const files = [];
+  const take = (path) => {
+    if (path && !seen.has(path)) { seen.add(path); files.push(path); }
+  };
+  for (const path of paths) {
+    if (!path.endsWith('/')) { take(path); continue; }
+    const listed = runGit('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', ref, '--', path);
+    for (const file of listed.split('\0')) take(file);
+  }
+  return files;
+}
+
+const ADD_ARGV_BUDGET = 8000;
+
+export function addPaths(paths, ctx = {}) {
   if (paths.length === 0) return;
-  git('add', '--', ...paths);
+  const root = ctx.root || ROOT;
+  const directories = paths.filter((path) => {
+    if (path.endsWith('/')) return true;
+    try { return lstatSync(join(root, path)).isDirectory(); } catch { return false; }
+  });
+  if (directories.length > 0) {
+    throw new Error(`addPaths refuses directory pathspecs: ${directories.join(', ')}`);
+  }
+  const runGit = ctx.git || git;
+  let batch = [];
+  let bytes = 0;
+  const flush = () => {
+    if (batch.length === 0) return;
+    runGit('--literal-pathspecs', 'add', '-f', '--', ...batch);
+    batch = [];
+    bytes = 0;
+  };
+  for (const path of paths) {
+    if (batch.length > 0 && bytes + path.length + 1 > ADD_ARGV_BUDGET) flush();
+    batch.push(path);
+    bytes += path.length + 1;
+  }
+  flush();
 }
 
 // Git's "exclude this from the pathspec" magic prefix. Preserved files are held
@@ -1311,24 +1427,81 @@ function rebuildDashboardBinaryIfNeeded() {
 // routes network traffic through an HTTP/HTTPS proxy that fetch() does
 // not respect but curl handles transparently.  The --silent / --fail flags
 // match the failure-handling already used throughout apply().
-function curlGet(url, extraArgs = []) {
+const CHECK_CURL_MAX_TIME_S = 10;
+const CHECK_GIT_PROBE_TIMEOUT_MS = 5000;
+
+export function curlGet(url, extraArgs = []) {
   return new Promise((resolve) => {
-    execFile(
-      'curl',
-      ['--silent', '--fail', '--max-time', '10', ...extraArgs, url],
-      { encoding: 'utf-8', timeout: 12000 },
-      (error, stdout) => {
-        if (error) {
-          resolve(null);
-        } else {
-          resolve(stdout.trim());
+    try {
+      execFile(
+        'curl',
+        ['--silent', '--fail', '--max-time', String(CHECK_CURL_MAX_TIME_S), ...extraArgs, url],
+        { encoding: 'utf-8', timeout: (CHECK_CURL_MAX_TIME_S + 1) * 1000 },
+        (error, stdout) => {
+          if (error) {
+            const detail = error.killed
+              ? `timeout (${CHECK_CURL_MAX_TIME_S + 1}s)`
+              : Number(error.code) === 28
+                ? `timeout (${CHECK_CURL_MAX_TIME_S}s)`
+                : error.code || String(error.message || error).split('\n')[0];
+            resolve({ ok: false, detail });
+          } else {
+            resolve({ ok: true, body: stdout.trim() });
+          }
         }
-      }
-    );
+      );
+    } catch (error) {
+      resolve({ ok: false, detail: error.code || String(error.message || error).split('\n')[0] });
+    }
   });
 }
 
+export function highestSemverTag(lsRemoteOutput, tagPrefix = '') {
+  let best = '';
+  for (const line of String(lsRemoteOutput ?? '').split('\n')) {
+    const ref = String(line.split('\t')[1] || '').replace(/\r$/, '');
+    let tag = ref.replace(/^refs\/tags\//, '').replace(/\^\{\}$/, '');
+    if (tagPrefix) {
+      if (!tag.startsWith(tagPrefix)) continue;
+      tag = tag.slice(tagPrefix.length);
+    }
+    const match = tag.match(SEMVER_RE);
+    if (match && (!best || compareVersions(match[1], best) > 0)) best = match[1];
+  }
+  return best;
+}
+
+// Same transport apply() uses. A curl failure alone is not proof the updater is
+// offline: git may have its own proxy/TLS configuration.
+export function gitRemoteVersion(repoUrl = CANONICAL_REPO) {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-c', 'credential.helper=', 'ls-remote', '--tags', repoUrl],
+      {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        timeout: CHECK_GIT_PROBE_TIMEOUT_MS,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    return { ok: true, version: highestSemverTag(out, 'career-ops-v') };
+  } catch (error) {
+    const stderr = String(error.stderr || '').trim().split('\n')[0].replace(/\r$/, '');
+    return { ok: false, detail: stderr || error.code || String(error.message || error).split('\n')[0] };
+  }
+}
+
 async function check() {
+  // Validate the checkout before honoring dismissal. A copied install nested in
+  // another repository must never be allowed to hide this safety failure.
+  const outer = gitToplevelMismatch();
+  if (outer) {
+    console.log(JSON.stringify({ status: 'not-a-git-toplevel', local: localVersion(), toplevel: outer }));
+    return;
+  }
+
   // Respect dismiss flag
   if (existsSync(join(ROOT, '.update-dismissed'))) {
     console.log(JSON.stringify({ status: 'dismissed' }));
@@ -1363,13 +1536,13 @@ async function check() {
     '--header', 'Accept: application/vnd.github+json',
     '--header', 'User-Agent: career-ops-update-checker',
   ]);
-  if (remoteRef !== null) {
-    try { remoteCommit = String(JSON.parse(remoteRef)?.object?.sha || '').trim(); } catch { /* malformed API response */ }
+  if (remoteRef.ok) {
+    try { remoteCommit = String(JSON.parse(remoteRef.body)?.object?.sha || '').trim(); } catch { /* malformed API response */ }
   }
 
-  if (rawVersion !== null) {
+  if (rawVersion.ok) {
     try {
-      const raw = parseVersionFile(rawVersion);
+      const raw = parseVersionFile(rawVersion.body);
       const match = raw.match(SEMVER_RE);
       remote = match ? match[1] : '';
     } catch {
@@ -1377,9 +1550,9 @@ async function check() {
     }
   }
 
-  if (releaseRaw !== null) {
+  if (releaseRaw.ok) {
     try {
-      const release = JSON.parse(releaseRaw);
+      const release = JSON.parse(releaseRaw.body);
       changelog = release.body || '';
       const rawTag = String(release.tag_name || '').trim();
       const match = rawTag.match(SEMVER_RE);
@@ -1390,14 +1563,25 @@ async function check() {
   }
 
   if (!remote && !releaseVersion) {
-    // Both curl calls returned null → genuine network failure.
-    // If one returned non-null but unparseable, remote/releaseVersion are
-    // empty strings, which still reaches the offline branch — that's the
-    // right conservative behaviour (no version = can't determine status).
-    const bothNetworkFailed = rawVersion === null && releaseRaw === null;
-    const status = bothNetworkFailed ? 'offline' : 'no-remote-version';
-    console.log(JSON.stringify({ status, local }));
-    return;
+    const bothNetworkFailed = !rawVersion.ok && !releaseRaw.ok;
+    let gitProbe = null;
+    if (bothNetworkFailed) {
+      gitProbe = gitRemoteVersion();
+      if (gitProbe.ok) remote = gitProbe.version;
+    }
+    if (!remote) {
+      const gitReachable = gitProbe?.ok === true;
+      const status = bothNetworkFailed && !gitReachable ? 'offline' : 'no-remote-version';
+      const payload = { status, local };
+      if (bothNetworkFailed) {
+        const gitDetail = gitReachable
+          ? 'git ls-remote reachable but returned no career-ops release tags'
+          : `git ls-remote: ${gitProbe?.detail || 'failed'}`;
+        payload.detail = `curl VERSION: ${rawVersion.detail}; curl releases: ${releaseRaw.detail}; ${gitDetail}`;
+      }
+      console.log(JSON.stringify(payload));
+      return;
+    }
   }
 
   // Use the higher version between VERSION file and GitHub Release
@@ -1604,6 +1788,7 @@ export function reconcileGitignore(localText, upstreamText) {
 // ── APPLY ───────────────────────────────────────────────────────
 
 async function apply() {
+  assertOwnGitToplevel();
   const local = localVersion();
   // --force overwrites system files this install edited locally (#2337). The
   // env var carries the flag across the self-reexec, which re-invokes the
@@ -1625,7 +1810,17 @@ async function apply() {
   }
 
   try {
-    // 1. Backup: create branch + stash uncommitted work (#915 bug 3).
+    // 1. Resolve upstream main once, then use that immutable commit for every
+    // show/checkout below. The self-reexec receives the same SHA and does not
+    // fetch again, closing the FETCH_HEAD TOCTOU and downgrade path (#3052).
+    if (!isReexec) console.log('Fetching latest from upstream...');
+    const targetRef = resolvePinnedUpdateTarget({
+      reexec: isReexec,
+      suppliedSha: process.env.CAREER_OPS_UPDATE_TARGET_SHA,
+    });
+    const targetVersion = validatePinnedTargetVersion(local, targetRef);
+
+    // 2. Backup: create branch + stash uncommitted work (#915 bug 3).
     // The branch only captures committed state; any uncommitted edits are
     // invisible to `git branch` and can be lost if the update aborts.
     // `git stash create` builds a stash object without touching the stash
@@ -1645,10 +1840,6 @@ async function apply() {
       console.log(`Backup branch created: ${backupBranch}`);
     }
 
-    // 2. Fetch from canonical repo
-    console.log('Fetching latest from upstream...');
-    git('fetch', CANONICAL_REPO, 'main');
-
     if (!isReexec) {
       const timeout = reexecTimeoutMs();
       try {
@@ -1656,8 +1847,8 @@ async function apply() {
         // at load time must exist first. Resolve the fetched update-system.mjs's
         // relative-import closure and check out exactly those files, so a future
         // new top-level import can't reintroduce the self-reexec crash (#1245).
-        const reexecFiles = resolveReexecCheckout('FETCH_HEAD', 'update-system.mjs');
-        git('checkout', 'FETCH_HEAD', '--', ...reexecFiles);
+        const reexecFiles = resolveReexecCheckout(targetRef, 'update-system.mjs');
+        git('checkout', targetRef, '--', ...reexecFiles);
         execFileSync(process.execPath, ['update-system.mjs', 'apply'], {
           cwd: ROOT,
           stdio: 'inherit',
@@ -1666,6 +1857,7 @@ async function apply() {
             ...process.env,
             CAREER_OPS_UPDATE_REEXEC: '1',
             CAREER_OPS_UPDATE_BACKUP_BRANCH: backupBranch,
+            CAREER_OPS_UPDATE_TARGET_SHA: targetRef,
             ...(updateForce ? { CAREER_OPS_UPDATE_FORCE: '1' } : {}),
           },
         });
@@ -1685,7 +1877,7 @@ async function apply() {
     const updated = [];
     let remoteSystemPaths = [];
     try {
-      const remoteUpdaterSource = git('show', 'FETCH_HEAD:update-system.mjs');
+      const remoteUpdaterSource = git('show', `${targetRef}:update-system.mjs`);
       remoteSystemPaths = extractArrayFromSource(remoteUpdaterSource, 'SYSTEM_PATHS');
     } catch {
       // Older targets may not have update-system.mjs. Fall back to the
@@ -1702,7 +1894,7 @@ async function apply() {
     // so; `--force` overwrites. Either way a .bak of the local content is
     // written first, so the fix is recoverable even from the forced path.
     const preservedPaths = [];
-    const atRisk = locallyModifiedSystemFiles(updatePaths, 'FETCH_HEAD');
+    const atRisk = locallyModifiedSystemFiles(updatePaths, targetRef);
     if (atRisk.length > 0) {
       console.log('');
       console.log(`${atRisk.length} system file(s) differ from upstream because THIS install changed them:`);
@@ -1747,7 +1939,7 @@ async function apply() {
         if (preservedHere.length > 0) {
           let upstreamFiles = [];
           try {
-            upstreamFiles = gitQuiet('ls-tree', '-r', '--name-only', 'FETCH_HEAD', '--', path)
+            upstreamFiles = gitQuiet('ls-tree', '-r', '--name-only', targetRef, '--', path)
               .split('\n').map((f) => f.trim()).filter(Boolean);
           } catch {
             // Unreadable entry — fall through to the normal checkout, which
@@ -1763,17 +1955,17 @@ async function apply() {
         // `error: pathspec '...' did not match any file(s) known to git`
         // immediately before the success banner — which reads as a failed
         // update and sends people chasing the wrong root cause (#1998).
-        gitQuiet('checkout', 'FETCH_HEAD', '--', path, ...preserveSpecs);
+        gitQuiet('checkout', targetRef, '--', path, ...preserveSpecs);
         updated.push(path);
       } catch (err) {
         // A path genuinely absent upstream is the expected skip. But the catch
         // also caught timeouts, permission errors, and repo corruption and
         // reported them as skips too — letting a partial update reach the
         // success banner (#1998). Confirm the path is actually absent from
-        // FETCH_HEAD before treating the failure as benign; otherwise rethrow.
+        // the pinned target before treating the failure as benign; otherwise rethrow.
         const spec = path.endsWith('/') ? path.slice(0, -1) : path;
         let absentUpstream = false;
-        try { gitQuiet('cat-file', '-e', `FETCH_HEAD:${spec}`); }
+        try { gitQuiet('cat-file', '-e', `${targetRef}:${spec}`); }
         catch { absentUpstream = true; }
         if (!absentUpstream) throw err;
         skippedPaths.push(path);
@@ -1792,7 +1984,7 @@ async function apply() {
       let remoteFiles = new Set();
       try {
         remoteFiles = new Set(
-          git('ls-tree', '-r', '--name-only', 'FETCH_HEAD')
+          git('ls-tree', '-r', '--name-only', targetRef)
             .split('\n').filter(Boolean).map((p) => p.replace(/\\/g, '/'))
         );
       } catch {
@@ -1835,7 +2027,7 @@ async function apply() {
     // and what it could only prevent inside this repository.
     try {
       const gitignorePath = join(ROOT, '.gitignore');
-      const upstreamGitignore = gitShowRaw('FETCH_HEAD:.gitignore');
+      const upstreamGitignore = gitShowRaw(`${targetRef}:.gitignore`);
       // Uncommitted local edits to .gitignore are the user's, and that is a
       // routine state rather than an exotic one: agent-inbox.mjs's own
       // ensureGitignored() appends a rule without committing it. Such a file
@@ -1878,7 +2070,7 @@ async function apply() {
       // Never abort an update over this, but never swallow it either: a silent
       // skip here is precisely how the original bug stayed invisible.
       console.error(`Could not reconcile .gitignore: ${err.message}`);
-      console.error('Your own rules were left untouched. Compare manually with: git diff FETCH_HEAD -- .gitignore');
+      console.error(`Your own rules were left untouched. Compare manually with: git diff ${targetRef} -- .gitignore`);
     }
 
     // Lazy import: keep update-system.mjs self-loading (see the top-of-file
@@ -1977,14 +2169,18 @@ async function apply() {
 
     // 7. Commit the update
     const remote = localVersion(); // Re-read after checkout updated VERSION
+    if (remote !== targetVersion) {
+      throw new Error(`Installed VERSION ${remote} does not match pinned target VERSION ${targetVersion}; update is incomplete.`);
+    }
     // Files deliberately left untouched are excluded from the staging pathspec
     // too: this update did not change them, so an "auto-update system files"
     // commit must not sweep the user's local edit in under its message (#2337).
     const pathsToStage = [...updated, ...preserveSpecs];
     const dismissFile = join(ROOT, '.update-dismissed');
     if (existsSync(dismissFile)) {
+      const trackedDismissMarker = isTracked('.update-dismissed');
       unlinkSync(dismissFile);
-      pathsToStage.push('.update-dismissed');
+      if (trackedDismissMarker) pathsToStage.push('.update-dismissed');
     }
 
     // Which commit form was used, so the failure path can suggest the matching
@@ -1992,8 +2188,15 @@ async function apply() {
     let usedIndexCommit = false;
 
     try {
-      prepareMaterializedSkillEntrypointsForStage(materializedSkillEntrypoints);
-      addPaths(pathsToStage);
+      const preparedEntrypoints = prepareMaterializedSkillEntrypointsForStage(materializedSkillEntrypoints);
+      const concreteUpdateFiles = expandToShippedFiles(updated, targetRef)
+        .filter((path) => !preservedSet.has(path));
+      const concreteStageFiles = [...new Set([
+        ...concreteUpdateFiles,
+        ...preparedEntrypoints.filter((path) => !preservedSet.has(path)),
+      ])];
+      if (pathsToStage.includes('.update-dismissed')) concreteStageFiles.push('.update-dismissed');
+      addPaths(concreteStageFiles);
       // Scope the commit to only the staged update paths (#915 bug 2).
       // A bare `git commit` would sweep any unrelated pre-staged files into
       // the update commit. Passing the explicit pathspec list constrains the
@@ -2069,7 +2272,7 @@ async function apply() {
     // Re-running apply fixes it (the first pass did update update-system.mjs
     // itself, so the second pass uses the target manifest) — but only if the
     // user is told, instead of being shown "Update complete" (#1998).
-    const unmaterialized = missingFromTargetManifest(remoteSystemPaths);
+    const unmaterialized = missingFromTargetManifest(remoteSystemPaths, targetRef);
     if (unmaterialized.length > 0) {
       console.error(`\nUpdate incomplete: v${local} → v${remote}`);
       console.error(`${unmaterialized.length} path(s) from the target manifest were not checked out:`);
@@ -2098,6 +2301,7 @@ async function apply() {
 // ── ROLLBACK ────────────────────────────────────────────────────
 
 function rollback() {
+  assertOwnGitToplevel();
   // Find most recent backup branch
   try {
     const branches = git('for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads/backup-pre-update-*');
@@ -2157,7 +2361,7 @@ function rollback() {
       }
     }
 
-    if (restored.length > 0) addPaths(restored);
+    if (restored.length > 0) addPaths(expandToShippedFiles(restored, latest));
     const rollbackPaths = [...restored, ...removed];
     try {
       // Scope the commit to the rollback paths (#915 bug 2). A bare

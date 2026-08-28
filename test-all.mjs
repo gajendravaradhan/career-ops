@@ -50,13 +50,14 @@ import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFil
 // EPERM) with linear backoff when given maxRetries, so default it everywhere
 // rather than at ~95 individual call sites. An explicit option still wins.
 const rmSync = (target, opts = {}) => _rmSync(target, { maxRetries: 10, retryDelay: 100, ...opts });
-import { join, dirname, basename, delimiter } from 'path';
+import { join, dirname, basename, delimiter, resolve } from 'path';
 import { tmpdir } from 'os';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
 import { pass, fail, warn, run, lastRunFailure, formatRunFailure, fileExists, finish, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
+import { collectMjsFiles } from './lib/mjs-files.mjs';
 
 /**
  * Read a repo-relative text file as UTF-8.
@@ -222,7 +223,9 @@ console.log('\n🧪 career-ops test suite\n');
 
 console.log('1. Syntax checks');
 
-const mjsFiles = readdirSync(ROOT).filter(f => f.endsWith('.mjs'));
+const mjsFiles = collectMjsFiles(ROOT)
+  .map((file) => file.slice(ROOT.length + 1).replace(/\\/g, '/'));
+console.log(`  (${mjsFiles.length} .mjs files, recursive from the repository root)`);
 
 // `node --check` parses a file and exits; it runs no user code, touches no
 // shared state, and its result depends on nothing but that one file. Spawning
@@ -3893,6 +3896,24 @@ if (
   pass('pipeline mode prevents parallel Playwright session cross-contamination (#2551)');
 } else {
   fail('pipeline concurrency section still permits unsafe parallel Playwright workers (#2551)');
+}
+
+const scanModeConcurrency = readFile('modes/scan.md');
+const scanLevel1Start = scanModeConcurrency.indexOf('4. **Level 1 — Playwright Scan**');
+const scanLevel1End = scanModeConcurrency.indexOf('\n5. **Level 2', scanLevel1Start);
+const scanLevel1Rule = scanLevel1Start >= 0 && scanLevel1End > scanLevel1Start
+  ? scanModeConcurrency.slice(scanLevel1Start, scanLevel1End)
+  : '';
+if (
+  scanLevel1Rule.includes('sequential for interactive Playwright') &&
+  scanLevel1Rule.includes('process companies **one at a time**') &&
+  scanLevel1Rule.includes('Multiple workers must never share one browser session') &&
+  scanLevel1Rule.includes('Batches of 3–5 are allowed only with `scan.extractor: cli`') &&
+  !scanLevel1Rule.includes('(parallel in batches of 3-5)')
+) {
+  pass('scan Level 1 prevents shared-session Playwright cross-contamination (#3366)');
+} else {
+  fail('scan Level 1 still permits unsafe parallel interactive Playwright workers (#3366)');
 }
 
 const openrouterRunnerPath = join(ROOT, 'openrouter-runner.mjs');
@@ -15670,18 +15691,22 @@ console.log('\n20. Path resolution layer and overrides');
 try {
   const { getCareerOpsRoot } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href);
 
-  // 1. Unset env vars should resolve to codebase root (ROOT)
+  // 1. With env vars unset, a real marker still takes precedence over ROOT.
+  // Developer checkouts legitimately keep one, so do not assume it is absent.
   const originalRoot = process.env.CAREER_OPS_ROOT;
   const originalDataDir = process.env.CAREER_OPS_DATA_DIR;
   delete process.env.CAREER_OPS_ROOT;
   delete process.env.CAREER_OPS_DATA_DIR;
 
   try {
+    const markerFile = join(ROOT, '.career-ops-data');
+    const markerValue = existsSync(markerFile) ? readFileSync(markerFile, 'utf-8').trim() : '';
+    const expectedDefaultRoot = markerValue ? resolve(ROOT, markerValue) : ROOT;
     const defaultRoot = getCareerOpsRoot();
-    if (defaultRoot === ROOT) {
-      pass('getCareerOpsRoot() defaults to codebase root when environment variables are unset');
+    if (defaultRoot === expectedDefaultRoot) {
+      pass('getCareerOpsRoot() respects marker precedence when environment variables are unset');
     } else {
-      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${ROOT}`);
+      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${expectedDefaultRoot}`);
     }
 
     // 2. CAREER_OPS_ROOT should override the resolved path
@@ -15716,7 +15741,7 @@ try {
   const tempTarget = mkdtempSync(join(ROOT, 'co-temp-target-'));
   try {
     process.env.CAREER_OPS_ROOT = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json'], { env: process.env }) || '{}');
     if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_ROOT default root check');
     } else {
@@ -15729,7 +15754,7 @@ try {
   // 4b. Test doctor.mjs respects CAREER_OPS_DATA_DIR override
   try {
     process.env.CAREER_OPS_DATA_DIR = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json'], { env: process.env }) || '{}');
     if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_DATA_DIR override check');
     } else {
@@ -15757,7 +15782,7 @@ try {
 
   try {
     process.env.CAREER_OPS_ROOT = tempRoot;
-    run(NODE, ['normalize-statuses.mjs']);
+    run(NODE, ['normalize-statuses.mjs'], { env: process.env });
     const updated = readFileSync(tempTracker, 'utf-8');
     if (updated.includes('| Applied |') && !updated.includes('**Applied**')) {
       pass('normalize-statuses.mjs respects CAREER_OPS_ROOT and modifies the correct tracker file');

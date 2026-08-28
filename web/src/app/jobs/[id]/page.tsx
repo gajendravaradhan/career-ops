@@ -4,6 +4,7 @@ import { use } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { markdownComponents } from "@/components/markdown-components";
 import { ArrowLeft, Loader2, Wrench, CircleDot, Check, X } from "lucide-react";
 import { useJobs } from "@/components/jobs/job-store";
 import { HeroGlow } from "@/components/hero-glow";
@@ -16,7 +17,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
 
   if (!job) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-10">
+      <div className="mx-auto max-w-4xl px-6 py-10">
         <Link href="/pipeline" className="inline-flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-brand">
           <ArrowLeft className="size-4" /> Pipeline
         </Link>
@@ -28,7 +29,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-6 py-8">
       <Link href="/pipeline" className="inline-flex items-center gap-1.5 text-sm text-muted transition-colors hover:text-brand">
         <ArrowLeft className="size-4" /> Pipeline
       </Link>
@@ -80,7 +81,7 @@ export default function JobPage({ params }: { params: Promise<{ id: string }> })
         <div className="mt-8">
           <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-muted">Output</h2>
           <div className="report-prose mt-3 rounded-2xl border border-border bg-surface/40 p-5">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{job.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{job.text}</ReactMarkdown>
           </div>
         </div>
       )}

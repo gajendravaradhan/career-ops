@@ -54,6 +54,9 @@ try {
 const ALL_PATHS = [...SYSTEM_PATHS, ...USER_PATHS, ...LOCAL_PATHS];
 
 const EXCLUDES = [
+  // A fork may intentionally commit its local path declaration for CI. The
+  // file is user-owned and never shipped; only the example belongs in SYSTEM_PATHS.
+  LOCAL_PATHS_FILE,
   '.coderabbit.yaml',
   '.editorconfig',
   '.envrc',
@@ -81,11 +84,7 @@ const EXCLUDES = [
 // this repository only, leaving a candidate's CV stageable in every fork.
 const RECONCILED_NOT_CHECKED_OUT = ['.gitignore'];
 
-// Trees that live in the repo but deliberately OUTSIDE the updater's world:
-// web/ is the experimental web UI — its own release-please component, never
-// shipped by update-system.mjs, never in the npm package. Excluding it here is
-// part of that isolation contract, not a coverage gap.
-const EXCLUDE_PREFIXES = ['web/'];
+const EXCLUDE_PREFIXES = [];
 
 function covered(file) {
   // If explicitly excluded, it is covered
@@ -123,9 +122,12 @@ if (process.argv.includes('--self-test')) {
 
   // Test sibling mismatch (strict prefix match)
   assert(covered('providers-sibling/justjoin.mjs') === false, 'providers-sibling/justjoin.mjs must NOT be covered');
-  assert(covered('web/package.json') === true, 'web/ tree must be covered (isolation-contract prefix exclude)');
+  assert(covered('web/package.json') === true, 'web/ tree must be covered by SYSTEM_PATHS');
   assert(covered('web-dashboard/index.html') === false, 'web-dashboard/ must NOT ride the web/ prefix exclude');
   assert(covered('.npmignore') === true, '.npmignore must be covered (excluded)');
+  assert(EXCLUDES.includes(LOCAL_PATHS_FILE), `${LOCAL_PATHS_FILE} must be excluded when a fork tracks it`);
+  assert(!EXCLUDES.includes('config/local-paths.example.txt'), 'the shipped local-paths example must not be excluded');
+  assert(SYSTEM_PATHS.includes('config/local-paths.example.txt'), 'the shipped local-paths example must remain a system path');
 
   // Test unrelated file
   assert(covered('untracked-orphan-file-xyz.js') === false, 'untracked-orphan-file-xyz.js must NOT be covered');

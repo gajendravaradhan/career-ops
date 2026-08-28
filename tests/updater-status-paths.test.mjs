@@ -32,13 +32,13 @@ import { join } from 'path';
 import { pass, fail } from './helpers.mjs';
 import { gitIn, gitStatusEntries, parsePorcelainStatus } from '../update-system.mjs';
 
-function makeRepo() {
+function makeRepo({ quotepath = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'co-status-paths-'));
   const g = (...args) => gitIn(dir, ...args);
   g('init', '-q', '-b', 'main', '.');
   g('config', 'user.email', 'test@example.com');
   g('config', 'user.name', 'Test');
-  g('config', 'core.quotepath', 'false');
+  g('config', 'core.quotepath', String(quotepath));
   return { dir, g };
 }
 
@@ -176,25 +176,59 @@ console.log('\n🧪 Testing updater git-status path parsing...');
   }
 }
 
-// ── 6. Entries carry no trailing CR (Windows line-ending robustness) ──────
-// The parser, not git's output, is what must be CRLF-robust: a Windows build
-// of git terminates `--porcelain` lines with CRLF (its native EOL), and the
-// CR is sliced off right where `path` begins. This has to be proven by feeding
-// a CRLF buffer straight through parsePorcelainStatus — on a machine where git
-// happens to emit LF the old test passed because git chose LF, not because the
-// parser handled CRLF. The direct input makes the assertion real.
+// ── 6. NUL-delimited status, including rename/copy origin fields ──────────
 {
-  const crlf = ' M b.mjs\r\n?? run-now.mjs\r\n';
+  const nulStatus = ' M b.mjs\0?? run-now.mjs\0R  modes/new.md\0modes/old.md\0C  data/copy.md\0data/src.md\0';
   const want = [
     { code: ' M', path: 'b.mjs' },
     { code: '??', path: 'run-now.mjs' },
+    { code: 'R ', path: 'modes/new.md' },
+    { code: 'R ', path: 'modes/old.md' },
+    { code: 'C ', path: 'data/copy.md' },
+    { code: 'C ', path: 'data/src.md' },
   ];
-  const got = JSON.stringify(parsePorcelainStatus(crlf));
+  const got = JSON.stringify(parsePorcelainStatus(nulStatus));
   if (got === JSON.stringify(want)) {
-    pass('CRLF-terminated porcelain lines parse with no trailing carriage return');
+    pass('NUL porcelain exposes plain, rename, and copy paths without quoting');
   } else {
-    fail(`CRLF porcelain damaged — parsed ${got}, expected ${JSON.stringify(want)}`);
+    fail(`NUL porcelain damaged — parsed ${got}, expected ${JSON.stringify(want)}`);
   }
+}
+
+// Paths requiring C-quoting in newline porcelain must round-trip as their real
+// filesystem names under -z, including the default core.quotepath behavior.
+for (const [label, name, quotepath] of [
+  ['spaced path', 'my notes.md', false],
+  ['non-ASCII path', 'café.md', true],
+]) {
+  const { dir, g } = makeRepo({ quotepath });
+  try {
+    mkdirSync(join(dir, 'data'));
+    writeFileSync(join(dir, 'data', name), 'v1\n');
+    g('add', '-A');
+    g('commit', '-qm', 'base');
+    writeFileSync(join(dir, 'data', name), 'v2\n');
+    assertRoundTrip(`${label} survives porcelain parsing byte-for-byte`, dir, [
+      { code: ' M', path: `data/${name}` },
+    ]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+{
+  const { dir, g } = makeRepo();
+  try {
+    mkdirSync(join(dir, 'data'));
+    writeFileSync(join(dir, 'data', 'old.md'), 'v1\n');
+    g('add', '-A');
+    g('commit', '-qm', 'base');
+    g('mv', 'data/old.md', 'data/new.md');
+    const paths = new Set(gitStatusEntries(dir).map((entry) => entry.path));
+    if (paths.size === 2 && paths.has('data/old.md') && paths.has('data/new.md')) {
+      pass('git rename surfaces both origin and destination paths');
+    } else {
+      fail(`rename paths damaged — got ${JSON.stringify([...paths])}`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 // And the real seam against an actual repo (LF here, CRLF on Windows runners)

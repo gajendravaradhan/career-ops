@@ -115,3 +115,14 @@ test("an incomplete trailing field must be OMITTED, never fabricated from a part
   assert.deepEqual(obj, { a: 1 }, "the incomplete 'b' field must not appear at all, fabricated or otherwise");
   assert.equal(truncated, true);
 });
+
+test("code fences inside a JSON string value survive wrapper removal", () => {
+  const answer = "Here is my code:\n```js\nfoo()\n```\nThanks";
+  const { obj, truncated } = extractJsonObject("```json\n" + JSON.stringify({ answer }) + "\n```");
+  assert.equal(obj.answer, answer);
+  assert.equal(truncated, false);
+});
+
+test("a bare fence in an unfenced JSON value survives", () => {
+  assert.equal(extractJsonObject(JSON.stringify({ answer: "x ``` y" })).obj.answer, "x ``` y");
+});

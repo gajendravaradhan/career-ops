@@ -45,6 +45,13 @@ import {
 } from './reserve-report-num.mjs';
 import { buildBudgetedPrompt } from './lib/context-budget.mjs';
 
+// Windows consoles can still default to a legacy code page even though Node
+// reads and writes UTF-8. Switch the shared console to UTF-8 before printing
+// Gemini's localized output; redirected output remains normal UTF-8 bytes.
+if (process.platform === 'win32') {
+  try { execFileSync('chcp.com', ['65001'], { stdio: 'ignore' }); } catch { /* best effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Bootstrap: load .env before anything else
 // ---------------------------------------------------------------------------

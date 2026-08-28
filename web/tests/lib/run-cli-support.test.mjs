@@ -14,6 +14,7 @@ import {
   codexStreamArgs,
   completedReportNames,
   hasNewCompletedReport,
+  newCompletedReportNum,
   isFatalClaudeStderr,
   isFatalCodexStderr,
   isFatalGenericStderr,
@@ -419,6 +420,12 @@ test("replacing a reservation with a report counts as persistence", () => {
 test("reservation churn alone does not count as persistence", () => {
   const before = ["020-existing.md", "021-RESERVED.md"];
   assert.equal(hasNewCompletedReport(before, ["020-existing.md", "022-RESERVED.md"]), false);
+});
+
+test("newCompletedReportNum returns only a newly completed report number", () => {
+  const before = ["020-existing.md", "021-RESERVED.md"];
+  assert.equal(newCompletedReportNum(before, ["020-existing.md", "021-new-company.md"]), 21);
+  assert.equal(newCompletedReportNum(before, ["020-existing.md", "022-RESERVED.md"]), null);
 });
 
 test("codexStreamArgs turns on the JSONL that parseCodexEvent reads", () => {

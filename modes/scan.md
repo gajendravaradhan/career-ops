@@ -179,8 +179,10 @@ Levels are additive — they are executed in order, and results are merged and d
    f. If the parser fails, log the error, attempt fallback via the ATS API if it exists, and continue with the other companies (**do not** add to `local_parser_ok`).
    g. If the parser completes successfully (steps c–e without fatal error), add the current company name to `local_parser_ok` and accumulate jobs in candidates.
 
-4. **Level 1 — Playwright Scan** (parallel in batches of 3-5):
+4. **Level 1 — Playwright Scan** (sequential for interactive Playwright):
    For each company in `tracked_companies` with `enabled: true`, a defined `careers_url`, and a **name not listed in `local_parser_ok`**:
+   - When using the shared `browser_navigate` + `browser_snapshot` session, process companies **one at a time**. Multiple workers must never share one browser session: a navigation can replace the page another worker is about to snapshot.
+   - Batches of 3–5 are allowed only with `scan.extractor: cli`, because each `browser-extract.mjs` invocation owns an isolated headless browser process. API/feed and WebSearch work may also remain parallel. If the CLI extractor falls back to the interactive browser tools, return to sequential processing.
    a. `browser_navigate` to `careers_url`.
    b. `browser_snapshot` to read all job listings.
    c. If the page has filters/departments, navigate the relevant sections.

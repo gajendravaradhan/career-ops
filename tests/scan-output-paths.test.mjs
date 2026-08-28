@@ -71,6 +71,31 @@ const SCANNER_PATH_VARS = [
   'CAREER_OPS_DATA_DIR',
 ];
 
+// Importing utilities from scan.mjs must be read-only. Previously module
+// initialization created <data-root>/data even when no scan or write ran.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'scan-import-only-'));
+  try {
+    const childEnv = { ...process.env };
+    for (const name of SCANNER_PATH_VARS) delete childEnv[name];
+    execFileSync(NODE, [
+      '--input-type=module',
+      '--eval',
+      `await import(${JSON.stringify(new URL('../scan.mjs', import.meta.url).href)})`,
+    ], {
+      cwd: dir,
+      env: { ...childEnv, CAREER_OPS_ROOT: dir },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (!existsSync(join(dir, 'data'))) pass('importing scan.mjs does not create data/');
+    else fail('importing scan.mjs created data/ without a requested write');
+  } catch (err) {
+    fail(`import-only scan.mjs check failed: ${err.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const runScan = (dir, env) => {
   const childEnv = { ...process.env };
   for (const name of SCANNER_PATH_VARS) delete childEnv[name];

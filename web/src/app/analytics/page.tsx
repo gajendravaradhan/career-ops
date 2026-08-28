@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { pipelineSummary } from "@/lib/career-ops";
+import { pipelineSummary, readStatusLog } from "@/lib/career-ops";
 import { canonStatus, scoreNum } from "@/lib/format";
-import { cumulativeTiles } from "@/lib/funnel-tiles.mjs";
+import { cumulativeTilesWithHistory } from "@/lib/funnel-tiles.mjs";
 
 export const dynamic = "force-dynamic";
 
@@ -46,12 +46,15 @@ export default function Analytics() {
   // already advanced past a stage must not read 0 for it (an offer-holder was
   // told "Interviews follow replies — keep follow-ups warm"). Mirrors
   // everInterview/everOffer in stats.mjs's computeFunnel().
-  const { interviews, offers } = cumulativeTiles(applications.map((a) => canonStatus(a.status)));
+  const { interviews, offers } = cumulativeTilesWithHistory(
+    applications.map((a) => ({ n: a.n, status: canonStatus(a.status) })),
+    readStatusLog(),
+  );
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-10">
       <h1 className="font-display text-2xl tracking-tight text-landing">Analytics</h1>
-      <p className="mt-1 text-sm text-muted">Across {total} tracked evaluations.</p>
+      <p className="mt-1 text-sm text-muted">Across {total} tracked evaluation{total === 1 ? "" : "s"}.</p>
 
       {/* headline stats */}
       <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">

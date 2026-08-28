@@ -16,9 +16,8 @@
 //   everInterview = Interview + Offer + Hired
 //   everOffer     = Offer + Hired
 // — on the reasoning that a landed job proves the offer and everything before
-// it. Rejected is deliberately NOT folded in: a status is a snapshot, so a
-// rejection never reveals which stage it came from (stats.mjs calls the middle
-// stages lower bounds for exactly this reason).
+// it. Rejected proves a response but not an interview from the snapshot alone;
+// status-log.tsv supplies the missing historical depth when available.
 
 /**
  * Count applications whose canonical status is any of `keys`.
@@ -43,4 +42,44 @@ export function cumulativeTiles(canonStatuses) {
     interviews: countOf(list, ["INTERVIEW", "OFFER", "HIRED"]),
     offers: countOf(list, ["OFFER", "HIRED"]),
   };
+}
+
+function stageRank(status) {
+  const value = String(status ?? "").toUpperCase();
+  if (value.includes("HIRED")) return 5;
+  if (value.includes("OFFER")) return 4;
+  if (value.includes("INTERVIEW")) return 3;
+  if (value.includes("RESPONDED") || value.includes("REJECTED")) return 2;
+  if (value.includes("APPLIED")) return 1;
+  return 0;
+}
+
+/** Ledger-aware headline counters, one maximum stage per live tracker row. */
+export function cumulativeTilesWithHistory(applications, statusLogText) {
+  const rows = Array.isArray(applications) ? applications : [];
+  const live = new Set();
+  const ranks = new Map();
+  for (const app of rows) {
+    const raw = String(app?.n ?? "").trim();
+    if (!/^\d+$/.test(raw)) continue;
+    const num = Number(raw);
+    live.add(num);
+    ranks.set(num, Math.max(ranks.get(num) ?? 0, stageRank(app?.status)));
+  }
+
+  for (const line of String(statusLogText ?? "").replace(/\r/g, "").split("\n")) {
+    const cols = line.split("\t");
+    if (cols.length < 4 || !/^\d+$/.test(cols[0]?.trim() ?? "") || !cols[1]?.trim() || !cols[2]?.trim() || !cols[3]?.trim()) continue;
+    const num = Number(cols[0].trim());
+    if (!live.has(num)) continue;
+    ranks.set(num, Math.max(ranks.get(num) ?? 0, stageRank(cols[2]), stageRank(cols[3])));
+  }
+
+  let interviews = 0;
+  let offers = 0;
+  for (const rank of ranks.values()) {
+    if (rank >= 3) interviews++;
+    if (rank >= 4) offers++;
+  }
+  return { interviews, offers };
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.30.1 (2026-08-28)
+
+
+### Bug Fixes
+
+* **updater:** pin each update to one immutable commit, refuse downgrades and enclosing-repository writes, stage exact shipped files, preserve deliberate local edits, and include the web system tree
+* **workspace:** keep system scripts rooted in the checkout while user data may live in an external data root; prevent scanner imports and shared test processes from leaking state
+* **web:** resolve application-specific report/CV/cover artifacts, preserve malformed portal configuration, honor output-language and market-mode settings, launch Windows CLI shims safely, and normalize international company domains
+* **analytics:** preserve historical response/interview/offer stages, treat a real zero score distinctly from missing data, and open tracker URLs from the dashboard
+* **scan and inbox:** serialize Playwright verification, use host-correct JobStreet/SEEK detail paths, and keep inbox selectors stable while requests are resolved
+* **cross-platform:** support Windows symlink-disabled checkouts, UTF-8 Gemini output, and npm PowerShell shims
+* **verification:** discover JavaScript tests recursively, restore suite-scoped environment overrides on failure, and cover the full system manifest
+
 ## [1.30.0](https://github.com/santifer/career-ops/compare/career-ops-v1.29.0...career-ops-v1.30.0) (2026-08-27)
 
 

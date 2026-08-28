@@ -295,6 +295,23 @@ func TestParseApplicationsMapsColumnsByHeader(t *testing.T) {
 	}
 }
 
+func TestParseApplicationsReadsTrackerURLWithoutReport(t *testing.T) {
+	tracker := `# Applications Tracker
+
+| # | Date | Company | Role | Score | Status | PDF | Report | URL | Notes |
+|---|------|---------|------|-------|--------|-----|--------|-----|-------|
+| 7 | 2026-08-28 | TriageCo | Engineer | — | Evaluated | ❌ | — | https://jobs.example.com/triage/7 | triage only |
+`
+	tempDir, _ := writeTracker(t, tracker)
+	apps := ParseApplications(tempDir)
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 application, got %d", len(apps))
+	}
+	if apps[0].JobURL != "https://jobs.example.com/triage/7" {
+		t.Fatalf("JobURL = %q, want tracker URL", apps[0].JobURL)
+	}
+}
+
 // End-to-end status update on the inserted-column layout: parse, update, and
 // re-parse. Only the Status cell may change; every other cell stays intact.
 func TestUpdateApplicationStatusInsertedColumn(t *testing.T) {

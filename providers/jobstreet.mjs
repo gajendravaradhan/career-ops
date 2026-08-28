@@ -24,6 +24,8 @@
 //   ID-Main  → id.jobstreet.com (Indonesia)
 //   SG-Main  → sg.jobstreet.com (Singapore)
 //   MY-Main  → my.jobstreet.com (Malaysia)
+//   AU-Main  → www.seek.com.au  (Australia)
+//   NZ-Main  → www.seek.co.nz   (New Zealand)
 
 const DEFAULT_API = 'https://id.jobstreet.com/api/jobsearch/v5/search';
 const DEFAULT_SITE_KEY = 'ID-Main';
@@ -46,6 +48,18 @@ const ALLOWED_JOBSTREET_HOSTS = new Set([
 // resolved against the current origin). We keep the allowlist for SSRF
 // protection on the base URL, then build the v5 search path from it.
 const V5_SEARCH_PATH = '/api/jobsearch/v5/search';
+
+// Only Indonesian Jobstreet hosts use the `/id/job/` detail path. Other
+// Jobstreet/SEEK markets serve `/job/` and return 404 for the Indonesian path.
+const ID_LOCALE_HOSTS = new Set(['id.jobstreet.com', 'www.jobstreet.co.id', 'jobstreet.co.id']);
+
+function jobDetailPath(origin) {
+  try {
+    return ID_LOCALE_HOSTS.has(new URL(origin).hostname) ? '/id/job/' : '/job/';
+  } catch {
+    return '/job/';
+  }
+}
 
 /** @param {string} url */
 function assertJobstreetUrl(url) {
@@ -116,10 +130,10 @@ export function parseJobstreetItem(item, origin, fallbackCompany) {
   const title = (item.title || '').trim();
   if (!title) return null;
 
-  // Build job URL from the job ID
+  // Build the market-specific job URL from the job ID.
   const jobId = (item.id || '').trim();
   if (!jobId) return null;
-  const url = `${origin}/id/job/${jobId}`;
+  const url = `${origin}${jobDetailPath(origin)}${jobId}`;
 
   // Validate URL hostname belongs to allowed set
   try {

@@ -6,9 +6,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveCli } from "@/lib/clis";
-import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
+import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, newCompletedReportNum, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates } from "@/lib/career-ops";
+import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
 import { renderAndMarkPdf, writeCvHtml, pdfRunOutcome } from "@/lib/pdf-render.mjs";
 import { createCvEnvelopeFilter, type CvEnvelope } from "@/lib/cv-envelope.mjs";
@@ -42,7 +42,8 @@ export async function POST(req: Request) {
 
   // These run the REAL core (modes/scripts), not just data — fail clearly if the
   // root is incomplete instead of faking it.
-  const needsScript: Record<string, string> = { evaluate: "modes/oferta.md", "fix-portal": "verify-portals.mjs", pdf: "generate-pdf.mjs" };
+  const lang = readLanguageConfig();
+  const needsScript: Record<string, string> = { evaluate: lang.evalModeFile, "fix-portal": "verify-portals.mjs", pdf: "generate-pdf.mjs" };
   const required = needsScript[kind];
   if (required && !fs.existsSync(path.join(careerOpsRoot(), required))) {
     return new Response(
@@ -102,7 +103,7 @@ export async function POST(req: Request) {
     kind === "evaluate"
       ? readInbox().find((j) => j.url === input)?.postedAt ?? readScanDates().get(input)
       : undefined;
-  const prompt = buildPrompt({ kind, input, memory: readMemory(), today, postedAt });
+  const prompt = buildPrompt({ kind, input, memory: readMemory(), today, postedAt, lang });
 
   const isClaude = cliId === "claude";
   // Which tools each kind gets, and the whole claude argv, live in
@@ -133,11 +134,13 @@ export async function POST(req: Request) {
       return [];
     }
   };
-  const persists = kind === "evaluate";
-  const reportsBefore = persists ? reportEntries() : [];
   // Tracker-mutating runs hold a write token so a row delete can't race their merge
   // (tracker.mjs delete doesn't yet share a lock with merge-tracker — see run-registry).
   const writeToken = kind === "evaluate" || kind === "pdf" ? acquireTrackerWrite() : null;
+  const persists = kind === "evaluate";
+  // Snapshot after taking the write token so another tracker-mutating run cannot
+  // create a report between this snapshot and the protected execution window.
+  const reportsBefore = persists ? reportEntries() : [];
 
   // stdin must reach EOF or the CLI waits on piped input that never comes: Codex's
   // `exec` blocks reading stdin for additional context, hangs until the kill timer,
@@ -461,7 +464,8 @@ export async function POST(req: Request) {
           return close();
         }
 
-        const wroteReport = hasNewCompletedReport(reportsBefore, reportEntries());
+        const reportsAfter = reportEntries();
+        const wroteReport = hasNewCompletedReport(reportsBefore, reportsAfter);
         // Honesty gate (#9): a green "done" with a parsed score requires a CLEAN exit,
         // real output, AND (for evaluations) a report actually written. Anything else
         // is surfaced — an errored run must never be banked as a confident score.
@@ -477,7 +481,12 @@ export async function POST(req: Request) {
           // instead of recording a confident score off a half-finished run.
           send({ type: "error", msg: "This run hit an error before finishing, so it isn't recorded as a confident result — re-run it to verify." });
         } else {
-          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd });
+          send({
+            type: "done",
+            tokens: lastTokens,
+            costUsd: lastCostUsd,
+            reportN: persists ? newCompletedReportNum(reportsBefore, reportsAfter) : null,
+          });
         }
         close();
       });

@@ -62,6 +62,19 @@ func TestPDFKeyFlashesWhenNoPDFExists(t *testing.T) {
 	}
 }
 
+func TestOpenURLKeyFlashesWhenNoURLExists(t *testing.T) {
+	pm := newPDFTestModel(t, t.TempDir(), []model.CareerApplication{
+		{Company: "Globex", Role: "Engineer", Status: "Evaluated"},
+	})
+	updated, cmd := pm.Update(keyMsg("o"))
+	if cmd != nil {
+		t.Fatal("expected no command when no job URL exists")
+	}
+	if updated.flash != "No URL found for this application" {
+		t.Fatalf("unexpected flash %q", updated.flash)
+	}
+}
+
 func TestPDFKeyOpensSingleMatchDirectly(t *testing.T) {
 	root := t.TempDir()
 	writePDFFixture(t, root, "output/cv-jane-doe-globex-2026-06-05.pdf")

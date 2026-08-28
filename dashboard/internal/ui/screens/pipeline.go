@@ -603,10 +603,12 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 		}
 
 	case "o":
-		if app, ok := m.CurrentApp(); ok && app.JobURL != "" {
-			return m, func() tea.Msg {
-				return PipelineOpenURLMsg{URL: app.JobURL}
+		if app, ok := m.CurrentApp(); ok {
+			if app.JobURL == "" {
+				m.flash = "No URL found for this application"
+				break
 			}
+			return m, func() tea.Msg { return PipelineOpenURLMsg{URL: app.JobURL} }
 		}
 
 	case "m":
@@ -1211,7 +1213,14 @@ func (m PipelineModel) sortLess() func(a, b model.CareerApplication) bool {
 		// Most recent contact first; empty dates sink to the bottom.
 		return func(a, b model.CareerApplication) bool { return a.LastContact > b.LastContact }
 	default: // sortScore
-		return func(a, b model.CareerApplication) bool { return a.Score > b.Score }
+		return func(a, b model.CareerApplication) bool {
+			aScored := a.HasScore || a.Score > 0
+			bScored := b.HasScore || b.Score > 0
+			if aScored != bScored {
+				return !aScored
+			}
+			return a.Score > b.Score
+		}
 	}
 }
 
@@ -1767,9 +1776,14 @@ func (m PipelineModel) renderAppLine(app model.CareerApplication, selected bool)
 	}
 	numStyle := lipgloss.NewStyle().Foreground(m.theme.Blue).Bold(true).Width(cw.num)
 
-	// Score with color
+	// Score with color. Sentinels are absent scores, not a numeric 0.0.
 	scoreStyle := m.scoreStyle(app.Score)
-	score := scoreStyle.Render(fmt.Sprintf("%.1f", app.Score))
+	scoreText := fmt.Sprintf("%.1f", app.Score)
+	if !app.HasScore && app.Score <= 0 {
+		scoreStyle = lipgloss.NewStyle().Foreground(m.theme.Subtext)
+		scoreText = "—"
+	}
+	score := scoreStyle.Render(scoreText)
 
 	// Company (truncate)
 	company := truncateRunes(app.Company, cw.company)

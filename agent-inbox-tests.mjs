@@ -225,6 +225,30 @@ console.log('7. concurrent adds do not lose items (append, not rewrite)');
   check('no item is duplicated or truncated', complete, `actual=${[...actual].join(', ')}`);
 }
 
+console.log('8. resolve numbers stay stable across a batch');
+{
+  const inbox = join(tmp('inbox-'), 'agent-inbox.md');
+  ['alpha', 'bravo', 'charlie', 'delta'].forEach((text) => run(inbox, ['add', text]));
+  run(inbox, ['resolve', '2', '--expect', 'bravo', '--result', 'R-bravo']);
+  run(inbox, ['resolve', '3', '--expect', 'charlie', '--result', 'R-charlie']);
+  run(inbox, ['resolve', '4', '--expect', 'delta', '--result', 'R-delta']);
+  const md = readFileSync(inbox, 'utf8');
+  check('each stable number receives its own result',
+    ['bravo', 'charlie', 'delta'].every((text) => new RegExp(`^- \\[x\\] .*${text} → result: R-${text}$`, 'm').test(md)), md);
+  const listed = run(inbox, ['list']);
+  check('remaining item keeps its original number', /^\s*1\. \[ \] .*alpha/m.test(listed), listed);
+}
+
+console.log('9. stale and mismatched resolves fail closed');
+{
+  const inbox = join(tmp('inbox-'), 'agent-inbox.md');
+  run(inbox, ['add', 'apply at Change.org']);
+  run(inbox, ['resolve', '1', '--expect', 'change.org', '--result', 'first']);
+  let stale = null;
+  try { run(inbox, ['resolve', '1', '--result', 'second']); } catch (error) { stale = error; }
+  check('an already-resolved item is not overwritten', stale?.status === 1 && !readFileSync(inbox, 'utf8').includes('second'));
+}
+
 // ---------------------------------------------------------------------------
 console.log('7c. a crashed writer\'s cause survives extraction');
 {

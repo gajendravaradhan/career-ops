@@ -31,11 +31,11 @@ export function pickSoleInstalled(
 }
 
 /** Saved Config cliId, or the only installed CLI (and persist that pick). */
-export async function resolveCliId(): Promise<string | null> {
+export async function resolveCliId(signal?: AbortSignal): Promise<string | null> {
   const saved = readSavedCliId();
   if (saved) return saved;
   try {
-    const r = await fetch("/api/clis");
+    const r = await fetch("/api/clis", { signal });
     const d = (await r.json()) as { clis?: { id: string; installed?: boolean }[] };
     const sole = pickSoleInstalled(d.clis);
     if (!sole) return null;

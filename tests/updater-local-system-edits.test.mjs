@@ -449,3 +449,30 @@ const PATHS = ['modes/', 'generate-cover-letter.mjs'];
     fail(`#16 threw=${threw} atRisk=${JSON.stringify(atRisk)}`);
   }
 }
+
+// ── 17. A deliberate revert to an older shipped version is a local edit ──
+// The installed-snapshot baseline must distinguish a previous updater commit
+// from bytes the user intentionally restored afterward (#3129). Pin both the
+// committed and uncommitted forms; either would otherwise be overwritten with
+// no warning and no .bak.
+for (const committed of [true, false]) {
+  const repo = makeRepo();
+  upstreamChange(repo, 'modes/pdf.md', 'shipped pdf v2\n');
+  replayUpdate(repo, '2');
+  upstreamChange(repo, 'modes/pdf.md', 'shipped pdf v3\n');
+  replayUpdate(repo, '3');
+  upstreamChange(repo, 'modes/pdf.md', 'shipped pdf v4\n');
+
+  writeFileSync(join(repo.dir, 'modes', 'pdf.md'), 'shipped pdf v2\n');
+  if (committed) {
+    repo.g('commit', '-qam', 'user: restore preferred older pdf mode');
+  }
+
+  const atRisk = locallyModifiedSystemFiles(PATHS, 'upstream', repo.ctx);
+  const kind = committed ? 'committed' : 'uncommitted';
+  if (atRisk.includes('modes/pdf.md')) {
+    pass(`a ${kind} deliberate revert to older shipped content is reported (#3129)`);
+  } else {
+    fail(`#17 ${kind} revert expected modes/pdf.md, got ${JSON.stringify(atRisk)}`);
+  }
+}

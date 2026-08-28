@@ -22,7 +22,11 @@
  * @returns {ExtractedJson}
  */
 export function extractJsonObject(text) {
-  const s = text.replace(/```(?:json)?/gi, "");
+  // Strip only a fence wrapping the message. Global removal also reached code
+  // fences inside JSON string values and silently corrupted application text.
+  const s = text
+    .replace(/^\s*```(?:json)?[^\S\n]*\n?/i, "")
+    .replace(/\n?[^\S\n]*```\s*$/, "");
   const start = s.indexOf("{");
   if (start === -1) return { obj: null, truncated: false };
 

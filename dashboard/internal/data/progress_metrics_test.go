@@ -1,6 +1,8 @@
 package data
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/santifer/career-ops/dashboard/internal/model"
@@ -51,14 +53,14 @@ func TestComputeProgressMetricsCountsHiredInEveryStage(t *testing.T) {
 	}
 }
 
-// With a hire in the denominator and numerator, the rates must be real numbers
-// rather than the 0%% the missing tiers produced.
+// A rejection is itself a response, so it belongs in both the applied and
+// responded cumulative tiers.
 func TestComputeProgressMetricsRatesIncludeHired(t *testing.T) {
-	// 1 hired + 1 rejected: everApplied = 2, everResponded/Interview/Offer = 1.
+	// 1 hired + 1 rejected: everApplied/responded = 2, Interview/Offer = 1.
 	pm := ComputeProgressMetrics(appsWithStatuses("Hired", "Rejected"))
 
-	if pm.ResponseRate != 50 {
-		t.Errorf("ResponseRate = %v, want 50", pm.ResponseRate)
+	if pm.ResponseRate != 100 {
+		t.Errorf("ResponseRate = %v, want 100", pm.ResponseRate)
 	}
 	if pm.InterviewRate != 50 {
 		t.Errorf("InterviewRate = %v, want 50", pm.InterviewRate)
@@ -87,9 +89,9 @@ func TestComputeProgressMetricsFunnelIsMonotonic(t *testing.T) {
 	if applied != 6 {
 		t.Errorf("Applied = %d, want 6", applied)
 	}
-	// responded = responded+interview+offer+hired = 4
-	if responded != 4 {
-		t.Errorf("Responded = %d, want 4", responded)
+	// responded = responded+interview+offer+hired+rejected = 5
+	if responded != 5 {
+		t.Errorf("Responded = %d, want 5", responded)
 	}
 	// interview = interview+offer+hired = 3
 	if interview != 3 {
@@ -98,5 +100,46 @@ func TestComputeProgressMetricsFunnelIsMonotonic(t *testing.T) {
 	// offer = offer+hired = 2
 	if offer != 2 {
 		t.Errorf("Offer = %d, want 2", offer)
+	}
+}
+
+func TestComputeProgressMetricsUsesStatusHistory(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "applications.md"), []byte("# marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ledger := "1\t2026-08-19\tOffer\tDiscarded\tset-status\tdeclined\n" +
+		"2\t2026-08-20\tInterview\tRejected\tset-status\t\n" +
+		"broken\t2026-08-20\tOffer\tHired\tset-status\t\n"
+	if err := os.WriteFile(filepath.Join(dataDir, "status-log.tsv"), []byte(ledger), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	apps := []model.CareerApplication{
+		{Number: 1, Status: "Discarded"},
+		{Number: 2, Status: "Rejected"},
+		{Number: 3, Status: "Rejected"},
+	}
+	pm := ComputeProgressMetricsWithHistory(apps, root)
+
+	for _, tc := range []struct {
+		label string
+		want  int
+	}{
+		{"Applied", 3},
+		{"Responded", 3},
+		{"Interview", 2},
+		{"Offer", 1},
+	} {
+		if got := stageCount(pm, tc.label); got != tc.want {
+			t.Errorf("funnel stage %q = %d, want %d", tc.label, got, tc.want)
+		}
+	}
+	if pm.TotalOffers != 1 {
+		t.Errorf("TotalOffers = %d, want 1 from ledger history", pm.TotalOffers)
 	}
 }

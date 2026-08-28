@@ -289,7 +289,8 @@ function isPlaywrightMcpFromPlugin() {
   return Object.entries(enabled).some(([key, on]) => {
     if (on !== true) return false;
     const entries = Array.isArray(installed[key]) ? installed[key] : [];
-    return entries.some(({ installPath } = {}) => {
+    return entries.some((entry) => {
+      const installPath = entry && typeof entry === 'object' ? entry.installPath : null;
       if (typeof installPath !== 'string' || !installPath) return false;
       return hasPlaywrightIn(readConfigIfPresent(join(installPath, '.mcp.json')), { bare: true });
     });

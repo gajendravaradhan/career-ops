@@ -202,7 +202,7 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 		}
 		a.count++
 		archTotal++
-		if app.Score > 0 {
+		if app.HasScore || app.Score > 0 {
 			a.scoreSum += app.Score
 			a.scoreCount++
 		}
@@ -328,15 +328,15 @@ func ComputeStatsMetrics(apps []model.CareerApplication) model.StatsMetrics {
 
 	// 5. Score Quality Tiers for Pie Chart breakdown
 	tierCounts := map[string]int{
-		"Elite (≥4.5)":      0,
-		"Strong (4.0-4.4)":  0,
-		"Viable (3.5-3.9)":  0,
+		"Elite (≥4.5)":       0,
+		"Strong (4.0-4.4)":   0,
+		"Viable (3.5-3.9)":   0,
 		"Moderate (3.0-3.4)": 0,
-		"Below Bar (<3.0)":  0,
+		"Below Bar (<3.0)":   0,
 	}
 	scoreTotal := 0
 	for _, app := range apps {
-		if app.Score <= 0 {
+		if !app.HasScore && app.Score <= 0 {
 			continue
 		}
 		scoreTotal++

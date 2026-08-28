@@ -495,7 +495,8 @@ Possible JSON responses:
 | `up-to-date` | Local version matches remote |
 | `update-available` | Newer version exists (includes `local`, `remote`, `changelog`) |
 | `dismissed` | User dismissed the update prompt |
-| `offline` | Could not reach GitHub |
+| `offline` | Could not reach GitHub over curl or git (includes `detail`) |
+| `no-remote-version` | A source responded but yielded no usable career-ops version (may include `detail`) |
 
 **Exit codes:** `0` always.
 

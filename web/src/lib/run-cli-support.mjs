@@ -333,12 +333,27 @@ export function completedReportNames(entries) {
  * @returns {boolean}
  */
 export function hasNewCompletedReport(beforeEntries, afterEntries) {
+  return newCompletedReportName(beforeEntries, afterEntries) !== null;
+}
+
+/** First newly completed report basename, or null. */
+export function newCompletedReportName(beforeEntries, afterEntries) {
   const before = completedReportNames(beforeEntries);
   const after = completedReportNames(afterEntries);
   for (const name of after) {
-    if (!before.has(name)) return true;
+    if (!before.has(name)) return name;
   }
-  return false;
+  return null;
+}
+
+/** Leading report number from the first newly completed report, or null. */
+export function newCompletedReportNum(beforeEntries, afterEntries) {
+  const name = newCompletedReportName(beforeEntries, afterEntries);
+  if (name === null) return null;
+  const match = name.match(/^(\d+)-/);
+  if (!match) return null;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) ? number : null;
 }
 
 // Graceful-SIGTERM budget (ms) for a run, kept safely under the route's 800s

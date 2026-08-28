@@ -42,14 +42,14 @@ type appModel struct {
 func (m *appModel) reloadPipelineData() {
 	apps := data.ParseApplications(m.careerOpsPath)
 	metrics := data.ComputeMetrics(apps)
-	m.progressMetrics = data.ComputeProgressMetrics(apps)
+	m.progressMetrics = data.ComputeProgressMetricsWithHistory(apps, m.careerOpsPath)
 	m.pipeline = m.pipeline.WithReloadedData(apps, metrics)
 	enrichArchetypes(m.careerOpsPath, apps, &m.pipeline)
 	m.statsMetrics = data.ComputeStatsMetrics(apps)
 	// Count only apps with a score so the header reflects evaluated offers.
 	m.evaluatedCount = 0
 	for _, a := range apps {
-		if a.Score > 0 {
+		if a.HasScore || a.Score > 0 {
 			m.evaluatedCount++
 		}
 	}
@@ -379,7 +379,7 @@ func main() {
 
 	// Compute metrics
 	metrics := data.ComputeMetrics(apps)
-	progressMetrics := data.ComputeProgressMetrics(apps)
+	progressMetrics := data.ComputeProgressMetricsWithHistory(apps, careerOpsPath)
 
 	// Batch-load all report summaries
 	t := theme.NewTheme("auto")
@@ -394,10 +394,10 @@ func main() {
 		theme:           t,
 		progressMetrics: progressMetrics,
 		statsMetrics:    statsMetrics,
-		evaluatedCount:  func() int {
+		evaluatedCount: func() int {
 			n := 0
 			for _, a := range apps {
-				if a.Score > 0 {
+				if a.HasScore || a.Score > 0 {
 					n++
 				}
 			}

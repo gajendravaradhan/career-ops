@@ -79,6 +79,7 @@ function searchDirs(): string[] {
     path.join(home, ".bun/bin"),
     path.join(home, ".deno/bin"),
     path.join(home, ".opencode/bin"),
+    path.join(home, ".grok/bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -90,6 +91,7 @@ function searchDirs(): string[] {
     const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
     extra.push(
       path.join(localAppData, "agy", "bin"), // Antigravity CLI
+      path.join(localAppData, "grok", "bin"), // Grok Build CLI
       path.join(localAppData, "Microsoft", "WindowsApps"), // winget/Store shims
       path.join(appData, "npm"), // npm global prefix on Windows
     );
@@ -97,6 +99,8 @@ function searchDirs(): string[] {
   const fromPath = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   return [...new Set([...fromPath, ...extra])];
 }
+
+export { prepareCliLaunch } from "./cli-launch.mjs";
 
 // On Windows, executables carry an extension (claude.exe, claude.cmd, ...).
 // Mirror the shell's PATHEXT resolution so a native-installer claude.exe is

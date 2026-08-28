@@ -104,6 +104,9 @@ reports/*-RESERVED.md
 # original sitting untracked in the repo root. Trailing `*` covers both.
 *.bak*
 
+# Failed atomic writes can leave a byte-for-byte user-data copy behind.
+*.tmp*
+
 # OpenRouter runner — generated data (personal, never commit)
 data/model-blacklist.json
 

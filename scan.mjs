@@ -87,16 +87,6 @@ const PIPELINE_PATH = process.env.CAREER_OPS_PIPELINE || path.join(DATA_ROOT, 'd
 const APPLICATIONS_PATH = path.join(DATA_ROOT, 'data/applications.md');
 const PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers');
 
-// Ensure required directories exist (fresh setup). Stays rooted in the user-data
-// directory; override parents are created by their writers before first write.
-const targetDataDir = path.join(DATA_ROOT, 'data');
-try {
-  mkdirSync(targetDataDir, { recursive: true });
-} catch (err) {
-  console.error(`ERROR: Could not create data directory at "${targetDataDir}": ${err.message}`);
-  process.exit(1);
-}
-
 const CONCURRENCY = 10;
 
 // Provider loading + routing live in providers/_registry.mjs so the portal
@@ -2068,6 +2058,7 @@ export function writeRunFailureRow(status = 'failed', filePath = SCAN_RUNS_PATH)
 }
 
 export function appendScanRunSummary(c, filePath = SCAN_RUNS_PATH) {
+  mkdirSync(path.dirname(filePath), { recursive: true });
   // The header is written only on first creation, so a release that appends or inserts a counter
   // leaves existing files with a header that no longer describes the rows below it. Nothing
   // migrates it and nothing notices: stats.mjs reads by column NAME, so it silently returns a

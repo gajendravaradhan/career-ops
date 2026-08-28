@@ -133,6 +133,18 @@ for (const path of timestampedBackupProbes) {
   else fail(`${path}: git check-ignore could not answer — ${stderr}`);
 }
 
+for (const path of [
+  '.cv.md.4821.1755900000000.1e0d6a0e.tmp',
+  '.applications.md.4821.1755900000000.1e0d6a0e.tmp',
+  'cv.md.tmp-4821-1e0d6a0e',
+  'config/profile.yml.tmp-4821-1e0d6a0e',
+]) {
+  const { verdict, stderr } = checkIgnore(path);
+  if (verdict === 'ignored') pass(`${path} is git-ignored`);
+  else if (verdict === 'not-ignored') fail(`${path} is NOT git-ignored — it may contain a leaked copy of user data`);
+  else fail(`${path}: git check-ignore could not answer — ${stderr}`);
+}
+
 // Not user-layer data, but the same mechanism: this one is about what a
 // reflexive `git add .` can swallow. test-all.mjs builds its script-runner
 // sandbox with mkdtempSync under the repo ROOT, and a suite interrupted

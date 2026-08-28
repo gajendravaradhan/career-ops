@@ -126,7 +126,7 @@ function parseItems() {
   const items = [];
   readFileSync(PATH, 'utf8').split('\n').forEach((line, i) => {
     const m = /^- \[([ xX])\]\s*(.*)$/.exec(line.trim());
-    if (m) items.push({ line: i, done: m[1].toLowerCase() === 'x', text: m[2] });
+    if (m) items.push({ num: items.length + 1, line: i, done: m[1].toLowerCase() === 'x', text: m[2] });
   });
   return items;
 }
@@ -136,6 +136,10 @@ function opt(name, def = '') {
   if (i < 0) return def;
   const v = process.argv[i + 1];
   return v && !v.startsWith('--') ? v : def;
+}
+
+function hasOpt(name) {
+  return process.argv.includes('--' + name);
 }
 
 async function add() {
@@ -198,20 +202,33 @@ async function add() {
 
 function list() {
   const all = process.argv.includes('--all');
-  const items = parseItems().filter((it) => all || !it.done);
+  const parsed = parseItems();
+  const items = parsed.filter((it) => all || !it.done);
   if (!items.length) return process.stdout.write(all ? 'Inbox is empty.\n' : 'No pending items.\n');
-  items.forEach((it, n) => {
-    process.stdout.write(`${String(n + 1).padStart(2)}. [${it.done ? 'x' : ' '}] ${it.text}\n`);
+  items.forEach((it) => {
+    process.stdout.write(`${String(it.num).padStart(2)}. [${it.done ? 'x' : ' '}] ${it.text}\n`);
   });
+  if (items.length < parsed.length) {
+    process.stdout.write(`\n(${parsed.length - items.length} resolved item(s) hidden; numbers are stable file positions. \`list --all\` shows everything.)\n`);
+  }
 }
 
 function resolve() {
   const n = Number(process.argv[3]);
   if (!Number.isInteger(n) || n < 1) fail('resolve needs a 1-based item number (see `list`)');
-  // Number against the pending view, so `list` then `resolve N` line up.
-  const pending = parseItems().filter((it) => !it.done);
-  const target = pending[n - 1];
-  if (!target) fail(`no pending item #${n} (${pending.length} pending)`);
+  // File positions stay stable as earlier items are resolved, so a batch copied
+  // from one list cannot silently drift onto different requests.
+  const items = parseItems();
+  const target = items[n - 1];
+  if (!target) fail(`no item #${n} (inbox has ${items.length} item(s))`);
+  if (target.done) fail(`item #${n} is already resolved — refusing to overwrite it`);
+  if (hasOpt('expect')) {
+    const expect = opt('expect');
+    if (!expect) fail('--expect needs a substring');
+    if (!target.text.toLowerCase().includes(expect.toLowerCase())) {
+      fail(`item #${n} does not contain --expect ${JSON.stringify(expect)} — refusing to resolve: ${target.text}`);
+    }
+  }
   const result = oneLine(opt('result'));
   const lines = readFileSync(PATH, 'utf8').split('\n');
   let updated = lines[target.line].replace('[ ]', '[x]');

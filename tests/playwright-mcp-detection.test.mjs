@@ -631,6 +631,32 @@ try {
     }
   }
 
+  // 26. A torn/corrupt plugin registry can contain null array entries. A
+  // destructuring callback throws on null even when it has a default value
+  // (defaults cover undefined only), so doctor must skip the entry (#3424).
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-26-'));
+    const home = makePluginHome({ key: PLUGIN_KEY, enabled: true, mcpJson: PLUGIN_MCP });
+    writeFileSync(
+      join(home, 'plugins', 'installed_plugins.json'),
+      JSON.stringify({ version: 2, plugins: { [PLUGIN_KEY]: [null] } }),
+    );
+    try {
+      const state = runDoctor(dir, [], { CLAUDE_CONFIG_DIR: home });
+      if (!expectWarn(state, '#26 null plugin entry')) {
+        // already failed
+      } else if (state.playwright_mcp?.claude === false
+          && state.warnings.some((w) => PLAYWRIGHT_RE.test(w))) {
+        pass('null installed-plugin entry is ignored instead of crashing doctor (#3424)');
+      } else {
+        fail(`#26 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
 } catch (e) {
   fail(`opencode-mcp-detection tests crashed: ${e.message}`);
 } finally {

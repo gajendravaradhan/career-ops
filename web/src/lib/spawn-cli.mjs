@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { prepareCliLaunch } from "./cli-launch.mjs";
 
 // Plain .mjs (same pattern as tracker-table.mjs/clean-chips.mjs) so
 // tests/lib/spawn-cli.test.mjs can import it directly under Node. Import it with the
@@ -27,7 +28,8 @@ import { spawn } from "node:child_process";
  * @param {import("node:child_process").SpawnOptionsWithoutStdio} options
  */
 export function spawnHeadlessCli(binPath, args, options) {
-  const child = spawn(binPath, args, options);
+  const launch = prepareCliLaunch(binPath, args);
+  const child = spawn(launch.command, launch.args, options);
   child.stdin?.end();
   return child;
 }

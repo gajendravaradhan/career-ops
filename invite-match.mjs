@@ -42,6 +42,11 @@ import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
+// System scripts always live beside this module. The user-data root may point
+// somewhere else (for example a NAS via .career-ops-data), so it must only be
+// used to resolve data. Using it as the executable root made --apply launch a
+// stale or dependency-incomplete remote copy of set-status.mjs.
+const SYSTEM_ROOT = dirname(fileURLToPath(import.meta.url));
 const CAREER_OPS = getCareerOpsRoot();
 const APPS_FILE = resolveTrackerPath(CAREER_OPS);
 
@@ -724,7 +729,7 @@ export function analyzeInvite(text, trackerRows = null) {
  * @returns {object} set-status.mjs's own --json result (or its structured error).
  */
 export function applyRejectionStatus(appNumber, options = {}) {
-  const scriptPath = join(CAREER_OPS, 'set-status.mjs');
+  const scriptPath = join(SYSTEM_ROOT, 'set-status.mjs');
   const env = options.appsFile ? { ...process.env, CAREER_OPS_TRACKER: options.appsFile } : process.env;
   try {
     const out = execFileSync(process.execPath, [scriptPath, String(appNumber), 'Rejected', '--json'], {

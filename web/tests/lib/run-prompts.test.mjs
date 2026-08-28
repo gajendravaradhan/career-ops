@@ -231,3 +231,18 @@ test("buildPrompt: the row without a date is byte-identical to before the featur
   const without = buildPrompt({ kind: "evaluate", input: "u", memory: "", today: "2026-08-14" });
   assert.equal(withDate.replace("; posted: 2026-08-07", ""), without);
 });
+
+test("buildPrompt honors market mode and output language independently", () => {
+  const lang = { output: "en", modesDir: "modes/de", evalModeFile: "modes/de/angebot.md" };
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang });
+  assert.match(prompt, /Read modes\/de\/angebot\.md and follow it EXACTLY/);
+  assert.match(prompt, /Write all human-facing output in "en"/);
+  assert.match(prompt, /modes\/de\/_shared\.md/);
+  assert.doesNotMatch(prompt, /Read modes\/oferta\.md/);
+});
+
+test("buildPrompt defaults to English prose and the global evaluation mode", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
+  assert.match(prompt, /Read modes\/oferta\.md and follow it EXACTLY/);
+  assert.match(prompt, /Write all human-facing output in "en"/);
+});

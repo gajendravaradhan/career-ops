@@ -197,8 +197,19 @@ export function run(cmd, args = [], opts = {}) {
   // executable is still allowlisted and the arguments are still an argv vector.
   lastFailure = null;
   const exe = resolveAllowedExecutable(cmd);
+  const explicitDataRoot = opts.env && (
+    Object.hasOwn(opts.env, 'CAREER_OPS_ROOT')
+    || Object.hasOwn(opts.env, 'CAREER_OPS_DATA_DIR')
+  );
+  // A developer's .career-ops-data marker is an operational preference, not
+  // test input. Ordinary child processes must stay inside this checkout or a
+  // local test run can read/write the live external data root. Tests that are
+  // specifically exercising a root override remain authoritative.
+  const childEnv = explicitDataRoot
+    ? opts.env
+    : { ...(opts.env ?? process.env), CAREER_OPS_ROOT: ROOT };
   try {
-    return execFileSync(exe, args, { cwd: ROOT, encoding: 'utf-8', timeout: 30000, ...opts }).trim();
+    return execFileSync(exe, args, { cwd: ROOT, encoding: 'utf-8', timeout: 30000, ...opts, env: childEnv }).trim();
   } catch (e) {
     // execFileSync attaches the child's streams and exit status to the error.
     // Keep them: callers report failure as `<name> crashed`, and without this a
